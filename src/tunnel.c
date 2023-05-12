@@ -76,6 +76,8 @@ static void close_and_free_remote(EV_P_ remote_t *remote);
 static void free_server(server_t *server);
 static void close_and_free_server(EV_P_ server_t *server);
 
+static ss_addr_t g_remote_addr[MAX_REMOTE_NUM];
+
 #ifdef __ANDROID__
 int vpn = 0;
 #endif
@@ -733,7 +735,24 @@ accept_cb(EV_P_ ev_io *w, int revents)
         setsockopt(serverfd, SOL_SOCKET, SO_RCVBUF, &tcp_incoming_rcvbuf, sizeof(int));
     }
 
-    int index                    = rand() % listener->remote_num;
+    int index = rand() % listener->remote_num;
+
+    if (listener->remote_addr[index]) {
+        char *host = g_remote_addr[index].host;
+        char *port = g_remote_addr[index].port;
+        struct sockaddr_storage *storage = ss_malloc(sizeof(struct sockaddr_storage));
+        memset(storage, 0, sizeof(struct sockaddr_storage));
+        if (get_sockaddr(host, port, storage, 1, ipv6first) == -1)  {
+            FATAL("failed to resolve remote hostname\n");
+            ss_free(storage);
+        } else {
+            if (listener->remote_addr[index])
+                ss_free(listener->remote_addr[index]);
+
+            listener->remote_addr[index] = (struct sockaddr *)storage;
+        }
+    }
+
     struct sockaddr *remote_addr = listener->remote_addr[index];
 
     int protocol = IPPROTO_TCP;
@@ -911,9 +930,6 @@ main(int argc, char **argv)
 
     int remote_num    = 0;
     char *remote_port = NULL;
-    ss_addr_t remote_addr[MAX_REMOTE_NUM];
-
-    memset(remote_addr, 0, sizeof(ss_addr_t) * MAX_REMOTE_NUM);
 
     static struct option long_options[] = {
         { "fast-open",   no_argument,       NULL, GETOPT_VAL_FAST_OPEN   },
@@ -987,7 +1003,7 @@ main(int argc, char **argv)
             break;
         case 's':
             if (remote_num < MAX_REMOTE_NUM) {
-                parse_addr(optarg, &remote_addr[remote_num++]);
+                parse_addr(optarg, &g_remote_addr[remote_num++]);
             }
             break;
         case 'p':
@@ -1078,7 +1094,7 @@ main(int argc, char **argv)
         if (remote_num == 0) {
             remote_num = conf->remote_num;
             for (i = 0; i < remote_num; i++)
-                remote_addr[i] = conf->remote_addr[i];
+                g_remote_addr[i] = conf->remote_addr[i];
         }
         if (remote_port == NULL) {
             remote_port = conf->remote_port;
@@ -1198,7 +1214,7 @@ main(int argc, char **argv)
             FATAL("failed to find a free port");
         }
         snprintf(tmp_port, 8, "%d", port);
-        if (is_ipv6only(remote_addr, remote_num, ipv6first)) {
+        if (is_ipv6only(g_remote_addr, remote_num, ipv6first)) {
             plugin_host = "::1";
         } else {
             plugin_host = "127.0.0.1";
@@ -1238,7 +1254,7 @@ main(int argc, char **argv)
 #endif
 
     if (local_addr == NULL) {
-        if (is_ipv6only(remote_addr, remote_num, ipv6first)) {
+        if (is_ipv6only(g_remote_addr, remote_num, ipv6first)) {
             local_addr = "::1";
         } else {
             local_addr = "127.0.0.1";
@@ -1309,9 +1325,9 @@ main(int argc, char **argv)
         size_t buf_size  = 256 * remote_num;
         char *remote_str = ss_malloc(buf_size);
 
-        snprintf(remote_str, buf_size, "%s", remote_addr[0].host);
+        snprintf(remote_str, buf_size, "%s", g_remote_addr[0].host);
         for (int i = 1; i < remote_num; i++) {
-            snprintf(remote_str + len, buf_size - len, "|%s", remote_addr[i].host);
+            snprintf(remote_str + len, buf_size - len, "|%s", g_remote_addr[i].host);
             len = strlen(remote_str);
         }
         int err = start_plugin(plugin, plugin_opts, remote_str,
@@ -1355,8 +1371,9 @@ main(int argc, char **argv)
     listen_ctx.remote_addr = ss_malloc(sizeof(struct sockaddr *) * remote_num);
     memset(listen_ctx.remote_addr, 0, sizeof(struct sockaddr *) * remote_num);
     for (i = 0; i < remote_num; i++) {
-        char *host = remote_addr[i].host;
-        char *port = remote_addr[i].port == NULL ? remote_port : remote_addr[i].port;
+        char *host = g_remote_addr[i].host;
+        g_remote_addr[i].port = g_remote_addr[i].port == NULL ? remote_port : g_remote_addr[i].port;
+        char *port = g_remote_addr[i].port;
         if (plugin != NULL) {
             host = plugin_host;
             port = plugin_port;
@@ -1400,8 +1417,8 @@ main(int argc, char **argv)
     // Setup UDP
     if (mode != TCP_ONLY) {
         LOGI("UDP relay enabled");
-        char *host                       = remote_addr[0].host;
-        char *port                       = remote_addr[0].port == NULL ? remote_port : remote_addr[0].port;
+        char *host                       = g_remote_addr[0].host;
+        char *port                       = g_remote_addr[0].port == NULL ? remote_port : g_remote_addr[0].port;
         struct sockaddr_storage *storage = ss_malloc(sizeof(struct sockaddr_storage));
         memset(storage, 0, sizeof(struct sockaddr_storage));
         if (get_sockaddr(host, port, storage, 1, ipv6first) == -1) {
