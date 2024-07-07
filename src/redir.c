@@ -783,7 +783,11 @@ accept_cb(EV_P_ ev_io *w, int revents)
         struct sockaddr_storage *storage = ss_malloc(sizeof(struct sockaddr_storage));
         memset(storage, 0, sizeof(struct sockaddr_storage));
         if (get_sockaddr(host, port, storage, 1, ipv6first) == -1)  {
-            FATAL("failed to resolve remote hostname\n");
+            if (listener->remote_addr[index] == NULL)
+                FATAL("failed to resolve remote hostname, abort");
+            else
+                ERROR("failed to resolve latest remote hostname");
+
             ss_free(storage);
         } else {
             if (listener->remote_addr[index])
