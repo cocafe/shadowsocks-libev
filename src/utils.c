@@ -24,6 +24,9 @@
 #include "config.h"
 #endif
 
+#include <unistd.h>
+#include <execinfo.h>
+
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -69,6 +72,13 @@ ERROR(const char *s)
 }
 
 #endif
+
+void dump_stack()
+{
+	void *array[10];
+	size_t size = backtrace(array, ARRAY_SIZE(array));
+	backtrace_symbols_fd(array, size, STDERR_FILENO);
+}
 
 int use_tty = 1;
 

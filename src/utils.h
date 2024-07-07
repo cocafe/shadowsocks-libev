@@ -32,6 +32,12 @@
 #define PORTSTRLEN 16
 #define SS_ADDRSTRLEN (INET6_ADDRSTRLEN + PORTSTRLEN + 1)
 
+void dump_stack();
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x)   (sizeof((x))/sizeof((x)[0]))
+#endif
+
 #ifdef __ANDROID__
 
 #include <android/log.h>
