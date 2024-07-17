@@ -41,9 +41,12 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <sys/un.h>
 #endif
 #include <libcork/core.h>
+
+#include "hash.h"
 
 #if defined(HAVE_SYS_IOCTL_H) && defined(HAVE_NET_IF_H) && defined(__linux__)
 #include <net/if.h>
@@ -72,6 +75,29 @@ enum datatypes {
 #include "server.h"
 #include "winsock.h"
 #include "resolv.h"
+
+#include "prometheus.h"
+
+static uint32_t metric_port = 6000;
+static sem_t sem_prom_update;
+static pthread_t tid_prom_server;
+static pthread_t tid_prom_update;
+static prom_metric_def metric_peer = { "ss_peer", "Peer host", PROM_METRIC_TYPE_GAUGE };
+static prom_metric_def metric_peer_tx = { "ss_peer_tx", "Peer TX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_peer_rx = { "ss_peer_rx", "Peer RX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_set metrics;
+
+static struct cork_hash_table *hstbl_peer;
+static pthread_spinlock_t lck_hstbl_peer;
+
+struct peer {
+    char *host;
+    struct {
+        uint64_t tx;
+        uint64_t rx;
+    } traffic;
+    struct timespec ts;
+};
 
 #ifndef EAGAIN
 #define EAGAIN EWOULDBLOCK
@@ -106,7 +132,7 @@ static void remote_send_cb(EV_P_ ev_io *w, int revents);
 static void server_timeout_cb(EV_P_ ev_timer *watcher, int revents);
 
 static remote_t *new_remote(int fd);
-static server_t *new_server(int fd, listen_ctx_t *listener);
+static server_t *new_server(int fd, listen_ctx_t *listener, char *peer_name);
 static remote_t *connect_to_remote(EV_P_ struct addrinfo *res,
                                    server_t *server);
 
@@ -936,6 +962,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     server_ctx_t *server_recv_ctx = (server_ctx_t *)w;
     server_t *server              = server_recv_ctx->server;
     remote_t *remote              = NULL;
+    struct peer *peer;
 
     buffer_t *buf = server->buf;
 
@@ -986,6 +1013,35 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             server->frag++;
         }
         return;
+    }
+
+    {
+        struct cork_hash_table_entry *entry = NULL;
+        struct timespec ts = {};
+
+        clock_gettime(CLOCK_REALTIME, &ts);
+
+        pthread_spin_lock(&lck_hstbl_peer);
+        entry = cork_hash_table_get_entry(hstbl_peer, server->peer_name);
+        if (!entry) {
+            bool is_new = 0;
+
+            peer = ss_malloc(sizeof(*peer));
+            memset(peer, 0, sizeof(*peer));
+            peer->host = ss_malloc(strlen(server->peer_name) + 1);
+            memset(peer->host, 0, strlen(server->peer_name) + 1);
+            memcpy(peer->host, server->peer_name, strlen(server->peer_name));
+            peer->ts = ts;
+
+            cork_hash_table_put(hstbl_peer, peer->host, peer, &is_new, NULL, NULL);
+        } else {
+            peer = entry->value;
+            peer->ts = ts;
+        }
+
+        peer->traffic.tx += r;
+
+        pthread_spin_unlock(&lck_hstbl_peer);
     }
 
     // handshake and transmit data
@@ -1194,6 +1250,26 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     FATAL("server context error");
 }
 
+void peer_rx_count(server_t *server, ssize_t bytes)
+{
+    struct peer *peer = NULL;
+    struct cork_hash_table_entry *entry = NULL;
+
+    pthread_spin_lock(&lck_hstbl_peer);
+    entry = cork_hash_table_get_entry(hstbl_peer, server->peer_name);
+    if (!entry) {
+        LOGE("peer %s not found in hash table", server->peer_name);
+        goto unlock;
+    } else {
+        peer = entry->value;
+    }
+
+    peer->traffic.rx += bytes;
+
+unlock:
+    pthread_spin_unlock(&lck_hstbl_peer);
+}
+
 static void
 server_send_cb(EV_P_ ev_io *w, int revents)
 {
@@ -1227,8 +1303,10 @@ server_send_cb(EV_P_ ev_io *w, int revents)
             // partly sent, move memory, wait for the next time to send
             server->buf->len -= s;
             server->buf->idx += s;
+            peer_rx_count(server, s);
             return;
         } else {
+            peer_rx_count(server, s);
             // all sent out, wait for reading
             server->buf->len = 0;
             server->buf->idx = 0;
@@ -1406,7 +1484,10 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         server->buf->idx  = s;
         ev_io_stop(EV_A_ & remote_recv_ctx->io);
         ev_io_start(EV_A_ & server->send_ctx->io);
+        peer_rx_count(server, s);
     }
+
+    peer_rx_count(server, s);
 
     // Disable TCP_NODELAY after the first response are sent
     if (!remote->recv_ctx->connected && !no_delay) {
@@ -1591,7 +1672,7 @@ close_and_free_remote(EV_P_ remote_t *remote)
 }
 
 static server_t *
-new_server(int fd, listen_ctx_t *listener)
+new_server(int fd, listen_ctx_t *listener, char *peer_name)
 {
     if (verbose) {
         server_conn++;
@@ -1633,6 +1714,10 @@ new_server(int fd, listen_ctx_t *listener)
 
     cork_dllist_add(&connections, &server->entries);
 
+    server->peer_name = ss_malloc(strlen(peer_name) + 1);
+    memset(server->peer_name, 0, strlen(peer_name) + 1);
+    memcpy(server->peer_name, peer_name, strlen(peer_name));
+
     return server;
 }
 
@@ -1670,6 +1755,7 @@ free_server(server_t *server)
 
     ss_free(server->recv_ctx);
     ss_free(server->send_ctx);
+    ss_free(server->peer_name);
     ss_free(server);
 }
 
@@ -1779,9 +1865,95 @@ accept_cb(EV_P_ ev_io *w, int revents)
 
     setnonblocking(serverfd);
 
-    server_t *server = new_server(serverfd, listener);
+    server_t *server = new_server(serverfd, listener, peer_name);
     ev_io_start(EV_A_ & server->recv_ctx->io);
     ev_timer_start(EV_A_ & server->recv_ctx->watcher);
+}
+
+void *prom_server_worker(void *arg)
+{
+    int *should_stop = arg;
+    int err;
+
+    LOGI("metric server running at %s:%u", "0.0.0.0", metric_port);
+
+    if ((err = prom_start_server(&metrics, metric_port, should_stop)) < 0) {
+        FATAL("failed to start prometheus metric server");
+    }
+
+    pthread_exit(NULL);
+
+    return NULL;
+}
+
+void metric_peer_update(void)
+{
+    struct cork_hash_table_entry *entry = NULL;
+    struct cork_hash_table_iterator iter = {};
+    struct timespec ts = {};
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    pthread_spin_lock(&lck_hstbl_peer);
+
+    cork_hash_table_iterator_init(hstbl_peer, &iter);
+
+    while ((entry = cork_hash_table_iterator_next(&iter)) != NULL) {
+        struct peer *peer = entry->value;
+        prom_label label_peer = { "peer", peer->host };
+
+        {
+            prom_metric *m = prom_get(&metrics, &metric_peer, 1, label_peer);
+
+            if ((ts.tv_sec - peer->ts.tv_sec) >= 300) {
+                // cork_hash_table_delete(hstbl_peer, peer->name, NULL, NULL);
+                // ss_free(peer->name);
+                // ss_free(peer);
+                prom_del(m);
+            } else {
+                m->value = 1;
+            }
+        }
+
+        {
+            prom_metric *m = prom_get(&metrics, &metric_peer_tx, 1, label_peer);
+            m->value = peer->traffic.tx;
+        }
+
+        {
+            prom_metric *m = prom_get(&metrics, &metric_peer_rx, 1, label_peer);
+            m->value = peer->traffic.rx;
+        }
+    }
+
+    pthread_spin_unlock(&lck_hstbl_peer);
+}
+
+void *prom_update_worker(void *arg)
+{
+    int *should_stop = arg;
+
+    sleep(1);
+
+    while (!*should_stop) {
+        struct timespec ts = { };
+
+        metric_peer_update();
+
+        prom_flush(&metrics);
+
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 10;
+
+        if (sem_timedwait(&sem_prom_update, &ts) != 0) {
+            if (errno != ETIMEDOUT)
+                LOGI("sem_timedwait(): %d %s\n", errno, strerror(errno));
+        }
+    }
+
+    pthread_exit(NULL);
+
+    return NULL;
 }
 
 int
@@ -1908,6 +2080,9 @@ main(int argc, char **argv)
             break;
         case 'p':
             server_port = optarg;
+            break;
+        case 'y':
+            metric_port = atoi(optarg);
             break;
         case GETOPT_VAL_PASSWORD:
         case 'k':
@@ -2377,11 +2552,54 @@ main(int argc, char **argv)
     // Init connections
     cork_dllist_init(&connections);
 
+    int should_stop = 0;
+    if (metric_port != 0) {
+        pthread_spin_init(&lck_hstbl_peer, 0);
+        sem_init(&sem_prom_update, 0, 0);
+
+        hstbl_peer = cork_string_hash_table_new(1024, 0);
+
+        prom_init(&metrics, metric_port);
+        prom_register(&metrics, &metric_peer);
+        prom_register(&metrics, &metric_peer_tx);
+        prom_register(&metrics, &metric_peer_rx);
+
+        if (pthread_create(&tid_prom_server, NULL, prom_server_worker, &should_stop))
+            FATAL("failed to create prometheus thread");
+
+        if (pthread_create(&tid_prom_update, NULL, prom_update_worker, &should_stop))
+            FATAL("failed to create prometheus thread");
+    }
+
     // start ev loop
     ev_run(loop, 0);
 
+    should_stop = 1;
+
     if (verbose) {
         LOGI("closed gracefully");
+    }
+
+    if (metric_port != 0) {
+        sem_post(&sem_prom_update);
+        pthread_cancel(tid_prom_server);
+        pthread_join(tid_prom_update, NULL);
+        prom_cleanup(&metrics);
+        sem_destroy(&sem_prom_update);
+
+        struct cork_hash_table_entry *entry;
+        struct cork_hash_table_iterator iter;
+
+        cork_hash_table_iterator_init(hstbl_peer, &iter);
+
+        while ((entry = cork_hash_table_iterator_next(&iter)) != NULL) {
+            struct peer *peer = entry->value;
+            ss_free(peer->host);
+            ss_free(peer);
+        }
+
+        cork_hash_table_free(hstbl_peer);
+        pthread_spin_destroy(&lck_hstbl_peer);
     }
 
 #ifndef __MINGW32__
