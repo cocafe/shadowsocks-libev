@@ -78,7 +78,7 @@ enum datatypes {
 
 #include "prometheus.h"
 
-static uint32_t metric_port = 6000;
+static uint32_t metric_port = 0;
 static sem_t sem_prom_update;
 static pthread_t tid_prom_server;
 static pthread_t tid_prom_update;
@@ -1015,7 +1015,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
-    {
+    if (metric_port != 0) {
         struct cork_hash_table_entry *entry = NULL;
         struct timespec ts = {};
 
@@ -1254,6 +1254,9 @@ void peer_rx_count(server_t *server, ssize_t bytes)
 {
     struct peer *peer = NULL;
     struct cork_hash_table_entry *entry = NULL;
+
+    if (metric_port == 0)
+        return;
 
     pthread_spin_lock(&lck_hstbl_peer);
     entry = cork_hash_table_get_entry(hstbl_peer, server->peer_name);
@@ -1905,13 +1908,14 @@ void metric_peer_update(void)
         {
             prom_metric *m = prom_get(&metrics, &metric_peer, 1, label_peer);
 
+            m->value = 1;
+
             if ((ts.tv_sec - peer->ts.tv_sec) >= 300) {
                 // cork_hash_table_delete(hstbl_peer, peer->name, NULL, NULL);
                 // ss_free(peer->name);
                 // ss_free(peer);
-                prom_del(m);
-            } else {
-                m->value = 1;
+                // prom_del(m);
+                m->value = 0;
             }
         }
 
@@ -1978,6 +1982,7 @@ main(int argc, char **argv)
     char *plugin_port = NULL;
     char tmp_port[8];
     char *nameservers = NULL;
+    char *str_metric_port = NULL;
 
     int server_num = 0;
     ss_addr_t server_addr[MAX_REMOTE_NUM];
@@ -2015,7 +2020,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:b:c:i:d:a:n:huUv6A",
+    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:b:c:i:d:a:n:y:huUv6A",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -2082,7 +2087,7 @@ main(int argc, char **argv)
             server_port = optarg;
             break;
         case 'y':
-            metric_port = atoi(optarg);
+            str_metric_port = optarg;
             break;
         case GETOPT_VAL_PASSWORD:
         case 'k':
@@ -2162,6 +2167,9 @@ main(int argc, char **argv)
         }
         if (server_port == NULL) {
             server_port = conf->remote_port;
+        }
+        if (str_metric_port == NULL) {
+            str_metric_port = conf->metric_port;
         }
         if (password == NULL) {
             password = conf->password;
@@ -2551,6 +2559,9 @@ main(int argc, char **argv)
 
     // Init connections
     cork_dllist_init(&connections);
+
+    if (str_metric_port)
+        metric_port = atoi(str_metric_port);
 
     int should_stop = 0;
     if (metric_port != 0) {

@@ -70,6 +70,7 @@ typedef struct {
     char *user;
     char *plugin;
     char *plugin_opts;
+    char *metric_port;
     int fast_open;
     int reuse_port;
     int tcp_incoming_sndbuf;
