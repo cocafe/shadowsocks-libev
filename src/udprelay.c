@@ -86,6 +86,29 @@ static void resolv_cb(struct sockaddr *addr, void *data);
 static void close_and_free_remote(EV_P_ remote_ctx_t *ctx);
 static remote_ctx_t *new_remote(int fd, server_ctx_t *server_ctx);
 
+#ifdef MODULE_REMOTE
+extern uint32_t metric_port;
+#include "peer.h"
+#endif
+
+char *get_peer_name_from_addr(struct sockaddr_storage *addr)
+{
+    static char peer_name[INET6_ADDRSTRLEN] = { 0 };
+
+    if (!addr)
+        return NULL;
+
+    if (addr->ss_family == AF_INET) {
+        struct sockaddr_in *s = (struct sockaddr_in *)addr;
+        inet_ntop(AF_INET, &s->sin_addr, peer_name, INET_ADDRSTRLEN);
+    } else if (addr->ss_family == AF_INET6) {
+        struct sockaddr_in6 *s = (struct sockaddr_in6 *)addr;
+        inet_ntop(AF_INET6, &s->sin6_addr, peer_name, INET6_ADDRSTRLEN);
+    }
+
+    return peer_name;
+}
+
 #ifdef __ANDROID__
 extern uint64_t tx;
 extern uint64_t rx;
@@ -876,9 +899,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 #endif
 
     if (buf->len > packet_size) {
-        if (verbose) {
-            LOGI("[udp] remote_recv_sendto fragmentation, MTU at least be: " SSIZE_FMT, buf->len + PACKET_HEADER_SIZE);
-        }
+        LOGI("[udp] remote_recv_sendto fragmentation, MTU at least be: " SSIZE_FMT, buf->len + PACKET_HEADER_SIZE);
     }
 
 
@@ -953,6 +974,18 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         goto CLEAN_UP;
     }
 
+#ifdef MODULE_REMOTE
+    if (metric_port != 0) {
+        struct peer *peer = NULL;
+        char *peer_name = get_peer_name_from_addr(&remote_ctx->src_addr);
+        if (peer_name)
+            peer = peer_get(peer_name);
+
+        if (peer)
+            peer->traffic_udp.rx += s;
+    }
+#endif // MODULE_REMOTE
+
 #endif
 
     // handle the UDP packet successfully,
@@ -978,6 +1011,10 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     socklen_t src_addr_len = sizeof(struct sockaddr_storage);
     unsigned int offset    = 0;
 
+#ifdef MODULE_REMOTE
+    struct peer *peer = NULL;
+#endif
+
 #ifdef MODULE_REDIR
     char control_buffer[64] = { 0 };
     struct msghdr msg;
@@ -1001,10 +1038,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         ERROR("[udp] server_recvmsg");
         goto CLEAN_UP;
     } else if (buf->len > packet_size) {
-        if (verbose) {
-            LOGI("[udp] UDP server_recv_recvmsg fragmentation, MTU at least be: " SSIZE_FMT,
-                 buf->len + PACKET_HEADER_SIZE);
-        }
+        LOGI("[udp] UDP server_recv_recvmsg fragmentation, MTU at least be: " SSIZE_FMT,
+                buf->len + PACKET_HEADER_SIZE);
     }
 
     if (get_dstaddr(&msg, &dst_addr)) {
@@ -1024,9 +1059,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         ERROR("[udp] server_recv_recvfrom");
         goto CLEAN_UP;
     } else if (r > packet_size) {
-        if (verbose) {
-            LOGI("[udp] server_recv_recvfrom fragmentation, MTU at least be: " SSIZE_FMT, r + PACKET_HEADER_SIZE);
-        }
+        LOGI("[udp] server_recv_recvfrom fragmentation, MTU at least be: " SSIZE_FMT, r + PACKET_HEADER_SIZE);
     }
 
     buf->len = r;
@@ -1181,6 +1214,15 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         // error in parse header
         goto CLEAN_UP;
     }
+
+#ifdef MODULE_REMOTE
+    if (metric_port != 0) {
+        char *peer_name = get_peer_name_from_addr(&src_addr);
+        if (peer_name) {
+            peer = peer_create_or_update(peer_name);
+        }
+    }
+#endif // MODULE_REMOTE
 
 #endif
 
@@ -1408,6 +1450,11 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 ev_io_start(EV_A_ & remote_ctx->io);
                 ev_timer_start(EV_A_ & remote_ctx->watcher);
             }
+
+#ifdef MODULE_REMOTE
+            if (peer)
+                peer->traffic_udp.tx += s;
+#endif
         }
     } else {
         struct query_ctx *query_ctx = new_query_ctx(buf->data + addr_header_len,

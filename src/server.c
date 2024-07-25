@@ -78,26 +78,21 @@ enum datatypes {
 
 #include "prometheus.h"
 
-static uint32_t metric_port = 0;
+uint32_t metric_port = 0;
 static sem_t sem_prom_update;
 static pthread_t tid_prom_server;
 static pthread_t tid_prom_update;
 static prom_metric_def metric_peer = { "ss_peer", "Peer host", PROM_METRIC_TYPE_GAUGE };
 static prom_metric_def metric_peer_tx = { "ss_peer_tx", "Peer TX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_rx = { "ss_peer_rx", "Peer RX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_peer_udp_tx = { "ss_peer_udp_tx", "Peer UDP TX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_peer_udp_rx = { "ss_peer_udp_rx", "Peer UDP RX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_set metrics;
 
 static struct cork_hash_table *hstbl_peer;
 static pthread_spinlock_t lck_hstbl_peer;
 
-struct peer {
-    char *host;
-    struct {
-        uint64_t tx;
-        uint64_t rx;
-    } traffic;
-    struct timespec ts;
-};
+#include "peer.h"
 
 #ifndef EAGAIN
 #define EAGAIN EWOULDBLOCK
@@ -956,13 +951,64 @@ setTosFromConnmark(remote_t *remote, server_t *server)
 
 #endif
 
+struct peer *peer_create_or_update(char *peer_name)
+{
+    struct cork_hash_table_entry *entry = NULL;
+    struct timespec ts = {};
+    struct peer *peer = NULL;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    pthread_spin_lock(&lck_hstbl_peer);
+    entry = cork_hash_table_get_entry(hstbl_peer, peer_name);
+    if (!entry) {
+        bool is_new = 0;
+
+        peer = ss_malloc(sizeof(*peer));
+        memset(peer, 0, sizeof(*peer));
+        peer->host = ss_malloc(strlen(peer_name) + 1);
+        memset(peer->host, 0, strlen(peer_name) + 1);
+        memcpy(peer->host, peer_name, strlen(peer_name));
+        peer->ts = ts;
+
+        cork_hash_table_put(hstbl_peer, peer->host, peer, &is_new, NULL, NULL);
+    } else {
+        peer = entry->value;
+        peer->ts = ts;
+    }
+
+    pthread_spin_unlock(&lck_hstbl_peer);
+
+    return peer;
+}
+
+struct peer *peer_get(char *peer_name)
+{
+    struct peer *peer = NULL;
+    struct cork_hash_table_entry *entry = NULL;
+
+    pthread_spin_lock(&lck_hstbl_peer);
+    entry = cork_hash_table_get_entry(hstbl_peer, peer_name);
+    if (!entry) {
+        LOGE("peer %s not found in hash table", peer_name);
+        goto unlock;
+    } else {
+        peer = entry->value;
+    }
+
+unlock:
+    pthread_spin_unlock(&lck_hstbl_peer);
+
+    return peer;
+}
+
 static void
 server_recv_cb(EV_P_ ev_io *w, int revents)
 {
     server_ctx_t *server_recv_ctx = (server_ctx_t *)w;
     server_t *server              = server_recv_ctx->server;
     remote_t *remote              = NULL;
-    struct peer *peer;
+    struct peer *peer = NULL;
 
     buffer_t *buf = server->buf;
 
@@ -1016,32 +1062,9 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     if (metric_port != 0) {
-        struct cork_hash_table_entry *entry = NULL;
-        struct timespec ts = {};
-
-        clock_gettime(CLOCK_REALTIME, &ts);
-
-        pthread_spin_lock(&lck_hstbl_peer);
-        entry = cork_hash_table_get_entry(hstbl_peer, server->peer_name);
-        if (!entry) {
-            bool is_new = 0;
-
-            peer = ss_malloc(sizeof(*peer));
-            memset(peer, 0, sizeof(*peer));
-            peer->host = ss_malloc(strlen(server->peer_name) + 1);
-            memset(peer->host, 0, strlen(server->peer_name) + 1);
-            memcpy(peer->host, server->peer_name, strlen(server->peer_name));
-            peer->ts = ts;
-
-            cork_hash_table_put(hstbl_peer, peer->host, peer, &is_new, NULL, NULL);
-        } else {
-            peer = entry->value;
-            peer->ts = ts;
-        }
-
-        peer->traffic.tx += r;
-
-        pthread_spin_unlock(&lck_hstbl_peer);
+        peer = peer_create_or_update(server->peer_name);
+        if (peer)
+            peer->traffic.tx += r; // XXX: not lock protected
     }
 
     // handshake and transmit data
@@ -1253,24 +1276,14 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 void peer_rx_count(server_t *server, ssize_t bytes)
 {
     struct peer *peer = NULL;
-    struct cork_hash_table_entry *entry = NULL;
 
     if (metric_port == 0)
         return;
 
-    pthread_spin_lock(&lck_hstbl_peer);
-    entry = cork_hash_table_get_entry(hstbl_peer, server->peer_name);
-    if (!entry) {
-        LOGE("peer %s not found in hash table", server->peer_name);
-        goto unlock;
-    } else {
-        peer = entry->value;
-    }
+    peer = peer_get(server->peer_name);
 
-    peer->traffic.rx += bytes;
-
-unlock:
-    pthread_spin_unlock(&lck_hstbl_peer);
+    if (peer)
+        peer->traffic.rx += bytes;
 }
 
 static void
@@ -1306,11 +1319,11 @@ server_send_cb(EV_P_ ev_io *w, int revents)
             // partly sent, move memory, wait for the next time to send
             server->buf->len -= s;
             server->buf->idx += s;
-            peer_rx_count(server, s);
+            // peer_rx_count(server, s);
             return;
         } else {
-            peer_rx_count(server, s);
             // all sent out, wait for reading
+            // peer_rx_count(server, s);
             server->buf->len = 0;
             server->buf->idx = 0;
             ev_io_stop(EV_A_ & server_send_ctx->io);
@@ -1927,6 +1940,16 @@ void metric_peer_update(void)
         {
             prom_metric *m = prom_get(&metrics, &metric_peer_rx, 1, label_peer);
             m->value = peer->traffic.rx;
+        }
+
+        {
+            prom_metric *m = prom_get(&metrics, &metric_peer_udp_tx, 1, label_peer);
+            m->value = peer->traffic_udp.tx;
+        }
+
+        {
+            prom_metric *m = prom_get(&metrics, &metric_peer_udp_rx, 1, label_peer);
+            m->value = peer->traffic_udp.rx;
         }
     }
 
@@ -2574,6 +2597,8 @@ main(int argc, char **argv)
         prom_register(&metrics, &metric_peer);
         prom_register(&metrics, &metric_peer_tx);
         prom_register(&metrics, &metric_peer_rx);
+        prom_register(&metrics, &metric_peer_udp_tx);
+        prom_register(&metrics, &metric_peer_udp_rx);
 
         if (pthread_create(&tid_prom_server, NULL, prom_server_worker, &should_stop))
             FATAL("failed to create prometheus thread");
