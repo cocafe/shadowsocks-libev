@@ -2000,6 +2000,7 @@ main(int argc, char **argv)
     char *iface     = NULL;
 
     char *server_port = NULL;
+    char *server_udp_port = NULL;
     char *plugin_opts = NULL;
     char *plugin_host = NULL;
     char *plugin_port = NULL;
@@ -2043,7 +2044,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:b:c:i:d:a:n:y:huUv6A",
+    while ((c = getopt_long(argc, argv, "f:s:p:P:l:k:t:m:b:c:i:d:a:n:M:huUv6A",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -2109,7 +2110,10 @@ main(int argc, char **argv)
         case 'p':
             server_port = optarg;
             break;
-        case 'y':
+        case 'P':
+            server_udp_port = optarg;
+            break;
+        case 'M':
             str_metric_port = optarg;
             break;
         case GETOPT_VAL_PASSWORD:
@@ -2190,6 +2194,9 @@ main(int argc, char **argv)
         }
         if (server_port == NULL) {
             server_port = conf->remote_port;
+        }
+        if (server_udp_port == NULL) {
+            server_udp_port = conf->remote_udp_port;
         }
         if (str_metric_port == NULL) {
             str_metric_port = conf->metric_port;
@@ -2542,7 +2549,13 @@ main(int argc, char **argv)
         int num_listen_ctx = 0;
         for (int i = 0; i < server_num; i++) {
             const char *host = server_addr[i].host;
-            const char *port = server_addr[i].port ? server_addr[i].port : server_port;
+            const char *port;
+
+            if (server_udp_port)
+                port = server_udp_port;
+            else
+                port = server_addr[i].port ? server_addr[i].port : server_port;
+
             if (plugin != NULL) {
                 port = plugin_port;
             }

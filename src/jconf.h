@@ -59,6 +59,7 @@ typedef struct {
     int port_password_num;
     ss_port_password_t port_password[MAX_PORT_NUM];
     char *remote_port;
+    char *remote_udp_port;
     char *local_addr;
     char *local_addr_v4;
     char *local_addr_v6;
