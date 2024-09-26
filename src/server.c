@@ -92,6 +92,9 @@ static prom_metric_set metrics;
 static struct cork_hash_table *hstbl_peer;
 static pthread_spinlock_t lck_hstbl_peer;
 
+static char ss_port[16] = { };
+static char ss_port_udp[16] = { };
+
 #include "peer.h"
 
 #ifndef EAGAIN
@@ -1917,9 +1920,20 @@ void metric_peer_update(void)
     while ((entry = cork_hash_table_iterator_next(&iter)) != NULL) {
         struct peer *peer = entry->value;
         prom_label label_peer = { "peer", peer->host };
+        prom_label label_port = { "port", ss_port };
+        prom_label label_port_udp = { "port_udp", ss_port_udp };
 
         {
-            prom_metric *m = prom_get(&metrics, &metric_peer, 1, label_peer);
+            prom_metric *m;
+
+            if (ss_port[0] != '\0' && ss_port_udp[0] != '\0')
+                m = prom_get(&metrics, &metric_peer, 3, label_peer, label_port, label_port_udp);
+            else if (ss_port[0] != '\0')
+                m = prom_get(&metrics, &metric_peer, 2, label_peer, label_port);
+            else if (ss_port_udp[0] != '\0')
+                m = prom_get(&metrics, &metric_peer, 2, label_peer, label_port_udp);
+            else
+                m = prom_get(&metrics, &metric_peer, 1, label_peer);
 
             m->value = 1;
 
@@ -1932,23 +1946,23 @@ void metric_peer_update(void)
             }
         }
 
-        {
-            prom_metric *m = prom_get(&metrics, &metric_peer_tx, 1, label_peer);
+        if (ss_port[0] != '\0') {
+            prom_metric *m = prom_get(&metrics, &metric_peer_tx, 2, label_peer, label_port);
             m->value = peer->traffic.tx;
         }
 
-        {
-            prom_metric *m = prom_get(&metrics, &metric_peer_rx, 1, label_peer);
+        if (ss_port[0] != '\0') {
+            prom_metric *m = prom_get(&metrics, &metric_peer_rx, 2, label_peer, label_port);
             m->value = peer->traffic.rx;
         }
 
-        {
-            prom_metric *m = prom_get(&metrics, &metric_peer_udp_tx, 1, label_peer);
+        if (ss_port_udp[0] != '\0') {
+            prom_metric *m = prom_get(&metrics, &metric_peer_udp_tx, 2, label_peer, label_port_udp);
             m->value = peer->traffic_udp.tx;
         }
 
-        {
-            prom_metric *m = prom_get(&metrics, &metric_peer_udp_rx, 1, label_peer);
+        if (ss_port_udp[0] != '\0') {
+            prom_metric *m = prom_get(&metrics, &metric_peer_udp_rx, 2, label_peer, label_port_udp);
             m->value = peer->traffic_udp.rx;
         }
     }
@@ -2506,6 +2520,8 @@ main(int argc, char **argv)
                 host = plugin_host;
             }
 
+            strncpy(ss_port, port, sizeof(ss_port));
+
             if (host && ss_is_ipv6addr(host))
                 LOGI("tcp server listening at [%s]:%s", host, port);
             else
@@ -2555,6 +2571,8 @@ main(int argc, char **argv)
                 port = server_udp_port;
             else
                 port = server_addr[i].port ? server_addr[i].port : server_port;
+
+            strncpy(ss_port_udp, port, sizeof(ss_port_udp));
 
             if (plugin != NULL) {
                 port = plugin_port;
