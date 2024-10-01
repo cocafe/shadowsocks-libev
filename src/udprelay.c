@@ -1409,6 +1409,15 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             LOGI("[udp] server_recv_sendto fragmentation, MTU at least be: " SSIZE_FMT,
                  buf->len - addr_header_len + PACKET_HEADER_SIZE);
         }
+
+#ifdef MODULE_REMOTE
+        if (metric_port != 0) {
+            if (peer && !peer_lock(peer)) {
+                peer->stats[PEER_STAT_UDP_FRAG]++;
+                peer_unlock(peer);
+            }
+        }
+#endif
     }
 
     if (remote_ctx != NULL) {
