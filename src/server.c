@@ -87,6 +87,8 @@ static prom_metric_def metric_invalid_peer = { "ss_invalid_peer", "Unauthenticat
 static prom_metric_def metric_peer_access = { "ss_peer_access", "Peer access count", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_tx = { "ss_peer_tx", "Peer TX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_rx = { "ss_peer_rx", "Peer RX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_tx = { "ss_tx", "Total TX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_rx = { "ss_rx", "Total RX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_set metrics;
 
 static char ss_port[16] = { };
@@ -2004,6 +2006,19 @@ void metric_invalid_peer_update(struct peer_tbl *tbl)
     pthread_spin_unlock(&tbl->lck);
 }
 
+void metric_ss_stat_update(void)
+{
+    {
+        prom_metric *m = prom_get(&metrics, &metric_ss_tx, 0);
+        m->value = tx;
+    }
+
+    {
+        prom_metric *m = prom_get(&metrics, &metric_ss_rx, 0);
+        m->value = rx;
+    }
+}
+
 void *prom_update_worker(void *arg)
 {
     int *should_stop = arg;
@@ -2015,6 +2030,7 @@ void *prom_update_worker(void *arg)
 
         metric_peer_update(&peer_tbl);
         metric_invalid_peer_update(&invalid_peer_tbl);
+        metric_ss_stat_update();
 
         prom_flush(&metrics);
 
@@ -2665,6 +2681,8 @@ main(int argc, char **argv)
         prom_register(&metrics, &metric_peer_rx);
         prom_register(&metrics, &metric_invalid_peer);
         prom_register(&metrics, &metric_peer_access);
+        prom_register(&metrics, &metric_ss_tx);
+        prom_register(&metrics, &metric_ss_rx);
 
         if (pthread_create(&tid_prom_server, NULL, prom_server_worker, &should_stop))
             FATAL("failed to create prometheus thread");
