@@ -90,7 +90,6 @@ static remote_ctx_t *new_remote(int fd, server_ctx_t *server_ctx);
 extern uint32_t metric_port;
 #include "peer.h"
 extern struct peer_tbl peer_tbl;
-extern struct peer_tbl invalid_peer_tbl;
 #endif
 
 char *get_peer_name_from_addr(struct sockaddr_storage *addr)
@@ -1057,13 +1056,33 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     r = recvfrom(server_ctx->fd, buf->data, buf_size,
                  0, (struct sockaddr *)&src_addr, &src_addr_len);
 
+#ifdef MODULE_REMOTE
+    if (metric_port != 0) {
+        char *peer_name = get_peer_name_from_addr(&src_addr);
+        if (peer_name) {
+            peer = peer_create_or_update(&peer_tbl, peer_name);
+        } else {
+            LOGE("[udp] failed to get peer name");
+        }
+    }
+#endif
+
     if (r == -1) {
         // error on recv
         // simply drop that packet
-        ERROR("[udp] server_recv_recvfrom");
+        LOGE("[udp] server_recv_recvfrom: %d (%s)", errno, strerror(errno));
         goto CLEAN_UP;
     } else if (r > packet_size) {
         LOGI("[udp] server_recv_recvfrom fragmentation, MTU at least be: " SSIZE_FMT, r + PACKET_HEADER_SIZE);
+
+#ifdef MODULE_REMOTE
+        if (metric_port != 0) {
+            if (peer && !peer_lock(peer)) {
+                peer->stats[PEER_STAT_UDP_FRAG]++;
+                peer_unlock(peer);
+            }
+        }
+#endif
     }
 
     buf->len = r;
@@ -1083,9 +1102,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         // drop the packet silently
 
         if (metric_port != 0) {
-            peer = peer_create_or_update(&invalid_peer_tbl, get_addr_str((struct sockaddr *)&src_addr, false));
             if (peer && !peer_lock(peer)) {
-                peer->access_cnt.udp++;
+                peer->stats[PEER_STAT_UDP_UNAUTH]++;
                 peer_unlock(peer);
             }
         }
@@ -1229,15 +1247,9 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
 #ifdef MODULE_REMOTE
-    if (metric_port != 0) {
-        char *peer_name = get_peer_name_from_addr(&src_addr);
-        if (peer_name) {
-            peer = peer_create_or_update(&peer_tbl, peer_name);
-            if (peer && !peer_lock(peer)) {
-                peer->access_cnt.tcp++;
-                peer_unlock(peer);
-            }
-        }
+    if (peer && !peer_lock(peer)) {
+        peer->stats[PEER_STAT_UDP_CONN]++;;
+        peer_unlock(peer);
     }
 #endif // MODULE_REMOTE
 

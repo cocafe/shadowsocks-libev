@@ -10,9 +10,31 @@
 
 #include "utils.h"
 
+enum {
+    PEER_STAT_TCP_UNAUTH,
+    PEER_STAT_UDP_UNAUTH,
+    PEER_STAT_TCP_CONN,
+    PEER_STAT_UDP_CONN,
+    PEER_STAT_UDP_FRAG,
+    PEER_STAT_UDP_INVALID,
+    PEER_STAT_TCP_INVALID,
+    NUM_PEER_STATS,
+};
+
+static char *label_peer_stats[] = {
+    [PEER_STAT_TCP_UNAUTH] = "tcp_unauth",
+    [PEER_STAT_UDP_UNAUTH] = "udp_unauth",
+    [PEER_STAT_TCP_CONN] = "tcp_conn",
+    [PEER_STAT_UDP_CONN] = "udp_conn",
+    [PEER_STAT_UDP_FRAG] = "udp_frag",
+    [PEER_STAT_UDP_INVALID] = "udp_invalid",
+    [PEER_STAT_TCP_INVALID] = "tcp_invalid",
+};
+
 struct peer {
     pthread_mutex_t lck;
     uint32_t destroy;
+    struct timespec ts;
 
     char *host;
 
@@ -25,12 +47,7 @@ struct peer {
         uint64_t rx;
     } traffic_udp;
 
-    struct {
-        uint32_t tcp;
-        uint32_t udp;
-    } access_cnt;
-
-    struct timespec ts;
+    uint64_t stats[NUM_PEER_STATS];
 };
 
 struct peer_tbl {
