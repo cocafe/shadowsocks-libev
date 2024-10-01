@@ -87,8 +87,6 @@ static prom_metric_def metric_invalid_peer = { "ss_invalid_peer", "Unauthenticat
 static prom_metric_def metric_peer_access = { "ss_peer_access", "Peer access count", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_tx = { "ss_peer_tx", "Peer TX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_rx = { "ss_peer_rx", "Peer RX bytes", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_peer_udp_tx = { "ss_peer_udp_tx", "Peer UDP TX bytes", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_peer_udp_rx = { "ss_peer_udp_rx", "Peer UDP RX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_set metrics;
 
 static char ss_port[16] = { };
@@ -1880,19 +1878,20 @@ void __metric_peer_update(struct peer *peer, struct timespec *ts)
 {
     prom_label label_peer = { "peer", peer->host };
     prom_label label_port = { "port", ss_port };
-    prom_label label_port_udp = { "port_udp", ss_port_udp };
+    prom_label label_port_udp = { "port", ss_port_udp };
     prom_label label_tcp = { "proto", "tcp" };
     prom_label label_udp = { "proto", "udp" };
 
     {
+        prom_label _label_port_udp = { "udp_port", ss_port_udp };
         prom_metric *m;
 
         if (ss_port[0] != '\0' && ss_port_udp[0] != '\0')
-            m = prom_get(&metrics, &metric_peer, 3, label_peer, label_port, label_port_udp);
+            m = prom_get(&metrics, &metric_peer, 3, label_peer, label_port, _label_port_udp);
         else if (ss_port[0] != '\0')
             m = prom_get(&metrics, &metric_peer, 2, label_peer, label_port);
         else if (ss_port_udp[0] != '\0')
-            m = prom_get(&metrics, &metric_peer, 2, label_peer, label_port_udp);
+            m = prom_get(&metrics, &metric_peer, 2, label_peer, _label_port_udp);
         else
             m = prom_get(&metrics, &metric_peer, 1, label_peer);
 
@@ -1914,22 +1913,22 @@ void __metric_peer_update(struct peer *peer, struct timespec *ts)
     }
 
     if (ss_port[0] != '\0') {
-        prom_metric *m = prom_get(&metrics, &metric_peer_tx, 2, label_peer, label_port);
+        prom_metric *m = prom_get(&metrics, &metric_peer_tx, 3, label_peer, label_port, label_tcp);
         m->value = peer->traffic.tx;
     }
 
     if (ss_port[0] != '\0') {
-        prom_metric *m = prom_get(&metrics, &metric_peer_rx, 2, label_peer, label_port);
+        prom_metric *m = prom_get(&metrics, &metric_peer_rx, 3, label_peer, label_port, label_tcp);
         m->value = peer->traffic.rx;
     }
 
     if (ss_port_udp[0] != '\0') {
-        prom_metric *m = prom_get(&metrics, &metric_peer_udp_tx, 2, label_peer, label_port_udp);
+        prom_metric *m = prom_get(&metrics, &metric_peer_tx, 3, label_peer, label_port_udp, label_udp);
         m->value = peer->traffic_udp.tx;
     }
 
     if (ss_port_udp[0] != '\0') {
-        prom_metric *m = prom_get(&metrics, &metric_peer_udp_rx, 2, label_peer, label_port_udp);
+        prom_metric *m = prom_get(&metrics, &metric_peer_rx, 3, label_peer, label_port_udp, label_udp);
         m->value = peer->traffic_udp.rx;
     }
 }
@@ -2664,8 +2663,6 @@ main(int argc, char **argv)
         prom_register(&metrics, &metric_peer);
         prom_register(&metrics, &metric_peer_tx);
         prom_register(&metrics, &metric_peer_rx);
-        prom_register(&metrics, &metric_peer_udp_tx);
-        prom_register(&metrics, &metric_peer_udp_rx);
         prom_register(&metrics, &metric_invalid_peer);
         prom_register(&metrics, &metric_peer_access);
 
