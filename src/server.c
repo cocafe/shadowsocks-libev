@@ -1196,6 +1196,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             peer = peer_create_or_update(&peer_tbl, server->peer_name);
             if (peer && !peer_lock(peer)) {
                 peer->access_cnt.tcp++;
+                peer->traffic.tx += r;
                 peer_unlock(peer);
             }
         }
@@ -1457,6 +1458,10 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 #endif
     int s = send(server->fd, server->buf->data, server->buf->len, 0);
 
+    if (s != -1) {
+        peer_rx_count(server, s);
+    }
+
     if (s == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             // no data, wait for send
@@ -1474,10 +1479,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         server->buf->idx  = s;
         ev_io_stop(EV_A_ & remote_recv_ctx->io);
         ev_io_start(EV_A_ & server->send_ctx->io);
-        peer_rx_count(server, s);
     }
-
-    peer_rx_count(server, s);
 
     // Disable TCP_NODELAY after the first response are sent
     if (!remote->recv_ctx->connected && !no_delay) {
