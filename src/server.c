@@ -522,11 +522,13 @@ static void report_addr(int fd, int peer_stat, const char *info)
         LOGE("failed to handshake with %s: %s", peer_name, info);
     }
 
-    if (peer_stat >= 0 && peer_stat < NUM_PEER_STATS) {
-        peer = peer_create_or_update(&peer_tbl, peer_name);
-        if (peer && !peer_lock(peer)) {
-            peer->stats[peer_stat]++;;
-            peer_unlock(peer);
+    if (metric_port != 0) {
+        if (peer_stat >= 0 && peer_stat < NUM_PEER_STATS) {
+            peer = peer_create_or_update(&peer_tbl, peer_name);
+            if (peer && !peer_lock(peer)) {
+                peer->stats[peer_stat]++;;
+                peer_unlock(peer);
+            }
         }
     }
 
