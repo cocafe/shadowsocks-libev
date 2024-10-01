@@ -89,6 +89,8 @@ static remote_ctx_t *new_remote(int fd, server_ctx_t *server_ctx);
 #ifdef MODULE_REMOTE
 extern uint32_t metric_port;
 #include "peer.h"
+extern struct peer_tbl peer_tbl;
+extern struct peer_tbl invalid_peer_tbl;
 #endif
 
 char *get_peer_name_from_addr(struct sockaddr_storage *addr)
@@ -979,10 +981,12 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         struct peer *peer = NULL;
         char *peer_name = get_peer_name_from_addr(&remote_ctx->src_addr);
         if (peer_name)
-            peer = peer_get(peer_name);
+            peer = peer_get(&peer_tbl, peer_name);
 
-        if (peer)
+        if (peer && !peer_lock(peer)) {
             peer->traffic_udp.rx += s;
+            peer_unlock(peer);
+        }
     }
 #endif // MODULE_REMOTE
 
@@ -1077,6 +1081,15 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         LOGE("failed to handshake with %s: %s",
                 get_addr_str((struct sockaddr *)&src_addr, false), "suspicious UDP packet");
         // drop the packet silently
+
+        if (metric_port != 0) {
+            peer = peer_create_or_update(&invalid_peer_tbl, get_addr_str((struct sockaddr *)&src_addr, false));
+            if (peer && !peer_lock(peer)) {
+                peer->access_cnt.udp++;
+                peer_unlock(peer);
+            }
+        }
+
         goto CLEAN_UP;
     }
 #endif
@@ -1219,7 +1232,11 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     if (metric_port != 0) {
         char *peer_name = get_peer_name_from_addr(&src_addr);
         if (peer_name) {
-            peer = peer_create_or_update(peer_name);
+            peer = peer_create_or_update(&peer_tbl, peer_name);
+            if (peer && !peer_lock(peer)) {
+                peer->access_cnt.tcp++;
+                peer_unlock(peer);
+            }
         }
     }
 #endif // MODULE_REMOTE
@@ -1452,8 +1469,10 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             }
 
 #ifdef MODULE_REMOTE
-            if (peer)
+            if (peer && !peer_lock(peer)) {
                 peer->traffic_udp.tx += s;
+                peer_unlock(peer);
+            }
 #endif
         }
     } else {

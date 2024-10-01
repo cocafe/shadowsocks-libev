@@ -82,20 +82,22 @@ uint32_t metric_port = 0;
 static sem_t sem_prom_update;
 static pthread_t tid_prom_server;
 static pthread_t tid_prom_update;
-static prom_metric_def metric_peer = { "ss_peer", "Peer host", PROM_METRIC_TYPE_GAUGE };
+static prom_metric_def metric_peer = { "ss_peer", "Peer", PROM_METRIC_TYPE_GAUGE };
+static prom_metric_def metric_invalid_peer = { "ss_invalid_peer", "Unauthenticated/invalid peer access count", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_peer_access = { "ss_peer_access", "Peer access count", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_tx = { "ss_peer_tx", "Peer TX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_rx = { "ss_peer_rx", "Peer RX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_udp_tx = { "ss_peer_udp_tx", "Peer UDP TX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_udp_rx = { "ss_peer_udp_rx", "Peer UDP RX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_set metrics;
 
-static struct cork_hash_table *hstbl_peer;
-static pthread_spinlock_t lck_hstbl_peer;
-
 static char ss_port[16] = { };
 static char ss_port_udp[16] = { };
 
 #include "peer.h"
+
+struct peer_tbl peer_tbl;
+struct peer_tbl invalid_peer_tbl;
 
 #ifndef EAGAIN
 #define EAGAIN EWOULDBLOCK
@@ -516,10 +518,17 @@ nftbl_init(const char* set_str)
 static void
 report_addr(int fd, const char *info)
 {
+    struct peer *peer;
     char *peer_name;
     peer_name = get_peer_name(fd);
     if (peer_name != NULL) {
         LOGE("failed to handshake with %s: %s", peer_name, info);
+    }
+
+    peer = peer_create_or_update(&invalid_peer_tbl, peer_name);
+    if (peer && !peer_lock(peer)) {
+        peer->access_cnt.tcp++;
+        peer_unlock(peer);
     }
 
 #ifdef USE_NFTABLES
@@ -954,57 +963,6 @@ setTosFromConnmark(remote_t *remote, server_t *server)
 
 #endif
 
-struct peer *peer_create_or_update(char *peer_name)
-{
-    struct cork_hash_table_entry *entry = NULL;
-    struct timespec ts = {};
-    struct peer *peer = NULL;
-
-    clock_gettime(CLOCK_REALTIME, &ts);
-
-    pthread_spin_lock(&lck_hstbl_peer);
-    entry = cork_hash_table_get_entry(hstbl_peer, peer_name);
-    if (!entry) {
-        bool is_new = 0;
-
-        peer = ss_malloc(sizeof(*peer));
-        memset(peer, 0, sizeof(*peer));
-        peer->host = ss_malloc(strlen(peer_name) + 1);
-        memset(peer->host, 0, strlen(peer_name) + 1);
-        memcpy(peer->host, peer_name, strlen(peer_name));
-        peer->ts = ts;
-
-        cork_hash_table_put(hstbl_peer, peer->host, peer, &is_new, NULL, NULL);
-    } else {
-        peer = entry->value;
-        peer->ts = ts;
-    }
-
-    pthread_spin_unlock(&lck_hstbl_peer);
-
-    return peer;
-}
-
-struct peer *peer_get(char *peer_name)
-{
-    struct peer *peer = NULL;
-    struct cork_hash_table_entry *entry = NULL;
-
-    pthread_spin_lock(&lck_hstbl_peer);
-    entry = cork_hash_table_get_entry(hstbl_peer, peer_name);
-    if (!entry) {
-        LOGE("peer %s not found in hash table", peer_name);
-        goto unlock;
-    } else {
-        peer = entry->value;
-    }
-
-unlock:
-    pthread_spin_unlock(&lck_hstbl_peer);
-
-    return peer;
-}
-
 static void
 server_recv_cb(EV_P_ ev_io *w, int revents)
 {
@@ -1064,12 +1022,6 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
-    if (metric_port != 0) {
-        peer = peer_create_or_update(server->peer_name);
-        if (peer)
-            peer->traffic.tx += r; // XXX: not lock protected
-    }
-
     // handshake and transmit data
     if (server->stage == STAGE_STREAM) {
         int s = send(remote->fd, remote->buf->data, remote->buf->len, 0);
@@ -1090,6 +1042,15 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             ev_io_stop(EV_A_ & server_recv_ctx->io);
             ev_io_start(EV_A_ & remote->send_ctx->io);
         }
+
+        if (metric_port != 0) {
+            peer = peer_get(&peer_tbl, server->peer_name);
+            if (peer && !peer_lock(peer)) {
+                peer->traffic.tx += r;
+                peer_unlock(peer);
+            }
+        }
+
         return;
     } else if (server->stage == STAGE_INIT) {
         /*
@@ -1231,6 +1192,14 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 LOGI("[%s] connect to %s:%d", remote_port, host, ntohs(port));
         }
 
+        if (metric_port != 0) {
+            peer = peer_create_or_update(&peer_tbl, server->peer_name);
+            if (peer && !peer_lock(peer)) {
+                peer->access_cnt.tcp++;
+                peer_unlock(peer);
+            }
+        }
+
         if (!need_query) {
             remote_t *remote = connect_to_remote(EV_A_ & info, server);
 
@@ -1283,10 +1252,12 @@ void peer_rx_count(server_t *server, ssize_t bytes)
     if (metric_port == 0)
         return;
 
-    peer = peer_get(server->peer_name);
+    peer = peer_get(&peer_tbl, server->peer_name);
 
-    if (peer)
+    if (peer && !peer_lock(peer)) {
         peer->traffic.rx += bytes;
+        peer_unlock(peer);
+    }
 }
 
 static void
@@ -1905,7 +1876,65 @@ void *prom_server_worker(void *arg)
     return NULL;
 }
 
-void metric_peer_update(void)
+void __metric_peer_update(struct peer *peer, struct timespec *ts)
+{
+    prom_label label_peer = { "peer", peer->host };
+    prom_label label_port = { "port", ss_port };
+    prom_label label_port_udp = { "port_udp", ss_port_udp };
+    prom_label label_tcp = { "proto", "tcp" };
+    prom_label label_udp = { "proto", "udp" };
+
+    {
+        prom_metric *m;
+
+        if (ss_port[0] != '\0' && ss_port_udp[0] != '\0')
+            m = prom_get(&metrics, &metric_peer, 3, label_peer, label_port, label_port_udp);
+        else if (ss_port[0] != '\0')
+            m = prom_get(&metrics, &metric_peer, 2, label_peer, label_port);
+        else if (ss_port_udp[0] != '\0')
+            m = prom_get(&metrics, &metric_peer, 2, label_peer, label_port_udp);
+        else
+            m = prom_get(&metrics, &metric_peer, 1, label_peer);
+
+        m->value = 1;
+
+        if ((ts->tv_sec - peer->ts.tv_sec) >= 300) {
+            m->value = 0;
+        }
+    }
+
+    if (ss_port[0] != '\0' && peer->access_cnt.tcp) {
+        prom_metric *m = prom_get(&metrics, &metric_peer_access, 3, label_peer, label_port, label_tcp);
+        m->value = peer->access_cnt.tcp;
+    }
+
+    if (ss_port_udp[0] != '\0' && peer->access_cnt.udp) {
+        prom_metric *m = prom_get(&metrics, &metric_peer_access, 3, label_peer, label_port_udp, label_udp);
+        m->value = peer->access_cnt.udp;
+    }
+
+    if (ss_port[0] != '\0') {
+        prom_metric *m = prom_get(&metrics, &metric_peer_tx, 2, label_peer, label_port);
+        m->value = peer->traffic.tx;
+    }
+
+    if (ss_port[0] != '\0') {
+        prom_metric *m = prom_get(&metrics, &metric_peer_rx, 2, label_peer, label_port);
+        m->value = peer->traffic.rx;
+    }
+
+    if (ss_port_udp[0] != '\0') {
+        prom_metric *m = prom_get(&metrics, &metric_peer_udp_tx, 2, label_peer, label_port_udp);
+        m->value = peer->traffic_udp.tx;
+    }
+
+    if (ss_port_udp[0] != '\0') {
+        prom_metric *m = prom_get(&metrics, &metric_peer_udp_rx, 2, label_peer, label_port_udp);
+        m->value = peer->traffic_udp.rx;
+    }
+}
+
+void metric_peer_update(struct peer_tbl *tbl)
 {
     struct cork_hash_table_entry *entry = NULL;
     struct cork_hash_table_iterator iter = {};
@@ -1913,61 +1942,67 @@ void metric_peer_update(void)
 
     clock_gettime(CLOCK_REALTIME, &ts);
 
-    pthread_spin_lock(&lck_hstbl_peer);
+    pthread_spin_lock(&tbl->lck);
 
-    cork_hash_table_iterator_init(hstbl_peer, &iter);
+    cork_hash_table_iterator_init(tbl->tbl, &iter);
 
     while ((entry = cork_hash_table_iterator_next(&iter)) != NULL) {
         struct peer *peer = entry->value;
-        prom_label label_peer = { "peer", peer->host };
-        prom_label label_port = { "port", ss_port };
-        prom_label label_port_udp = { "port_udp", ss_port_udp };
 
-        {
-            prom_metric *m;
+        if (peer_lock(peer))
+            continue;
 
-            if (ss_port[0] != '\0' && ss_port_udp[0] != '\0')
-                m = prom_get(&metrics, &metric_peer, 3, label_peer, label_port, label_port_udp);
-            else if (ss_port[0] != '\0')
-                m = prom_get(&metrics, &metric_peer, 2, label_peer, label_port);
-            else if (ss_port_udp[0] != '\0')
-                m = prom_get(&metrics, &metric_peer, 2, label_peer, label_port_udp);
-            else
-                m = prom_get(&metrics, &metric_peer, 1, label_peer);
+        __metric_peer_update(peer, &ts);
 
-            m->value = 1;
-
-            if ((ts.tv_sec - peer->ts.tv_sec) >= 300) {
-                // cork_hash_table_delete(hstbl_peer, peer->name, NULL, NULL);
-                // ss_free(peer->name);
-                // ss_free(peer);
-                // prom_del(m);
-                m->value = 0;
-            }
-        }
-
-        if (ss_port[0] != '\0') {
-            prom_metric *m = prom_get(&metrics, &metric_peer_tx, 2, label_peer, label_port);
-            m->value = peer->traffic.tx;
-        }
-
-        if (ss_port[0] != '\0') {
-            prom_metric *m = prom_get(&metrics, &metric_peer_rx, 2, label_peer, label_port);
-            m->value = peer->traffic.rx;
-        }
-
-        if (ss_port_udp[0] != '\0') {
-            prom_metric *m = prom_get(&metrics, &metric_peer_udp_tx, 2, label_peer, label_port_udp);
-            m->value = peer->traffic_udp.tx;
-        }
-
-        if (ss_port_udp[0] != '\0') {
-            prom_metric *m = prom_get(&metrics, &metric_peer_udp_rx, 2, label_peer, label_port_udp);
-            m->value = peer->traffic_udp.rx;
-        }
+        peer_unlock(peer);
     }
 
-    pthread_spin_unlock(&lck_hstbl_peer);
+    pthread_spin_unlock(&tbl->lck);
+}
+
+void __metric_invalid_peer_update(struct peer *peer, struct timespec *ts)
+{
+    prom_label label_peer = { "peer", peer->host };
+    prom_label label_port = { "port", ss_port };
+    prom_label label_port_udp = { "port_udp", ss_port_udp };
+    prom_label label_tcp = { "proto", "tcp" };
+    prom_label label_udp = { "proto", "udp" };
+
+    if (ss_port[0] != '\0' && peer->access_cnt.tcp) {
+        prom_metric *m = prom_get(&metrics, &metric_invalid_peer, 3, label_peer, label_port, label_tcp);
+        m->value = peer->access_cnt.tcp;
+    }
+
+    if (ss_port_udp[0] != '\0' && peer->access_cnt.udp) {
+        prom_metric *m = prom_get(&metrics, &metric_invalid_peer, 3, label_peer, label_port_udp, label_udp);
+        m->value = peer->access_cnt.udp;
+    }
+}
+
+void metric_invalid_peer_update(struct peer_tbl *tbl)
+{
+    struct cork_hash_table_entry *entry = NULL;
+    struct cork_hash_table_iterator iter = {};
+    struct timespec ts = {};
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    pthread_spin_lock(&tbl->lck);
+
+    cork_hash_table_iterator_init(tbl->tbl, &iter);
+
+    while ((entry = cork_hash_table_iterator_next(&iter)) != NULL) {
+        struct peer *peer = entry->value;
+
+        if (peer_lock(peer))
+            continue;
+
+        __metric_invalid_peer_update(peer, &ts);
+
+        peer_unlock(peer);
+    }
+
+    pthread_spin_unlock(&tbl->lck);
 }
 
 void *prom_update_worker(void *arg)
@@ -1979,7 +2014,8 @@ void *prom_update_worker(void *arg)
     while (!*should_stop) {
         struct timespec ts = { };
 
-        metric_peer_update();
+        metric_peer_update(&peer_tbl);
+        metric_invalid_peer_update(&invalid_peer_tbl);
 
         prom_flush(&metrics);
 
@@ -2619,10 +2655,10 @@ main(int argc, char **argv)
 
     int should_stop = 0;
     if (metric_port != 0) {
-        pthread_spin_init(&lck_hstbl_peer, 0);
-        sem_init(&sem_prom_update, 0, 0);
+        peer_tbl_init(&peer_tbl);
+        peer_tbl_init(&invalid_peer_tbl);
 
-        hstbl_peer = cork_string_hash_table_new(1024, 0);
+        sem_init(&sem_prom_update, 0, 0);
 
         prom_init(&metrics, metric_port);
         prom_register(&metrics, &metric_peer);
@@ -2630,6 +2666,8 @@ main(int argc, char **argv)
         prom_register(&metrics, &metric_peer_rx);
         prom_register(&metrics, &metric_peer_udp_tx);
         prom_register(&metrics, &metric_peer_udp_rx);
+        prom_register(&metrics, &metric_invalid_peer);
+        prom_register(&metrics, &metric_peer_access);
 
         if (pthread_create(&tid_prom_server, NULL, prom_server_worker, &should_stop))
             FATAL("failed to create prometheus thread");
@@ -2654,19 +2692,8 @@ main(int argc, char **argv)
         prom_cleanup(&metrics);
         sem_destroy(&sem_prom_update);
 
-        struct cork_hash_table_entry *entry;
-        struct cork_hash_table_iterator iter;
-
-        cork_hash_table_iterator_init(hstbl_peer, &iter);
-
-        while ((entry = cork_hash_table_iterator_next(&iter)) != NULL) {
-            struct peer *peer = entry->value;
-            ss_free(peer->host);
-            ss_free(peer);
-        }
-
-        cork_hash_table_free(hstbl_peer);
-        pthread_spin_destroy(&lck_hstbl_peer);
+        peer_tbl_deinit(&invalid_peer_tbl);
+        peer_tbl_deinit(&peer_tbl);
     }
 
 #ifndef __MINGW32__
