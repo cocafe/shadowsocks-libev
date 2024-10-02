@@ -171,7 +171,7 @@ static inline struct peer_conn *peer_conn_get(struct hash_tbl *tbl, char *peer, 
     return conn;
 }
 
-static inline struct peer *peer_create(char *peer_name, struct timespec *ts)
+static inline struct peer *peer_create(char *peer_name)
 {
     struct peer *peer = NULL;
 
@@ -189,7 +189,6 @@ static inline struct peer *peer_create(char *peer_name, struct timespec *ts)
 
     memset(peer->host, 0, strlen(peer_name) + 1);
     memcpy(peer->host, peer_name, strlen(peer_name));
-    peer->ts = *ts;
 
     pthread_mutex_init(&peer->lck, NULL);
 
@@ -241,10 +240,7 @@ static inline void peer_unlock(struct peer *peer)
 static inline struct peer *peer_create_or_get(struct hash_tbl *tbl, char *peer_name)
 {
     struct cork_hash_table_entry *entry = NULL;
-    struct timespec ts = {};
     struct peer *peer = NULL;
-
-    clock_gettime(CLOCK_REALTIME, &ts);
 
     if (!tbl || !peer_name)
         return NULL;
@@ -254,14 +250,13 @@ static inline struct peer *peer_create_or_get(struct hash_tbl *tbl, char *peer_n
     if (!entry) {
         bool is_new = 0; // useless
 
-        peer = peer_create(peer_name, &ts);
+        peer = peer_create(peer_name);
         if (!peer)
             goto out;
 
         cork_hash_table_put(tbl->tbl, peer->host, peer, &is_new, NULL, NULL);
     } else {
         peer = entry->value;
-        peer->ts = ts;
     }
 
 out:

@@ -548,7 +548,7 @@ static void report_addr(int fd, int peer_stat, const char *info)
         if (peer_stat >= 0 && peer_stat < NUM_PEER_STATS) {
             peer = peer_create_or_get(&peer_tbl, peer_name);
             if (peer && !peer_lock(peer)) {
-                peer->stats[peer_stat]++;;
+                peer->stats[peer_stat]++;
                 peer_unlock(peer);
             }
         }
@@ -1234,8 +1234,9 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         if (metric_port != 0) {
             peer = peer_create_or_get(&peer_tbl, server->peer_name);
             if (peer && !peer_lock(peer)) {
-                peer->stats[PEER_STAT_TCP_CONN]++;;
+                peer->stats[PEER_STAT_TCP_CONN]++;
                 peer->stats[PEER_STAT_TCP_TX] += r;
+                clock_gettime(CLOCK_REALTIME, &peer->ts);
                 peer_unlock(peer);
             }
 
@@ -1955,7 +1956,7 @@ void metric_peer_online_update(struct peer *peer, struct timespec *ts)
     prom_label label_port = { "port", ss_port };
     prom_label label_port_udp = { "udp_port", ss_port_udp };
 
-    {
+    if (peer->ts.tv_sec != 0) {
         prom_metric *m;
 
         if (ss_port[0] != '\0' && ss_port_udp[0] != '\0')
