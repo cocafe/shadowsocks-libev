@@ -88,6 +88,7 @@ static prom_metric_def metric_peer_rx = { "ss_peer_rx", "Peer RX bytes", PROM_ME
 static prom_metric_def metric_peer_stats = { "ss_peer", "Peer stats", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_ss_tx = { "ss_tx", "Total TX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_ss_rx = { "ss_rx", "Total RX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_conn = { "ss_conn", "Connection count", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_set metrics;
 
 static char ss_port[16] = { };
@@ -1607,8 +1608,9 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
 static remote_t *
 new_remote(int fd)
 {
+    remote_conn++;
+
     if (verbose) {
-        remote_conn++;
         LOGI("new connection to remote, %d opened remote connections", remote_conn);
     }
 
@@ -1657,8 +1659,8 @@ close_and_free_remote(EV_P_ remote_t *remote)
         ev_io_stop(EV_A_ & remote->recv_ctx->io);
         close(remote->fd);
         free_remote(remote);
+        remote_conn--;
         if (verbose) {
-            remote_conn--;
             LOGI("close a connection to remote, %d opened remote connections", remote_conn);
         }
     }
@@ -1667,8 +1669,8 @@ close_and_free_remote(EV_P_ remote_t *remote)
 static server_t *
 new_server(int fd, listen_ctx_t *listener, char *peer_name)
 {
+    server_conn++;
     if (verbose) {
-        server_conn++;
         LOGI("new connection from client, %d opened client connections", server_conn);
     }
 
@@ -1765,8 +1767,8 @@ close_and_free_server(EV_P_ server_t *server)
         ev_timer_stop(EV_A_ & server->recv_ctx->watcher);
         close(server->fd);
         free_server(server);
+        server_conn--;
         if (verbose) {
-            server_conn--;
             LOGI("close a connection from client, %d opened client connections", server_conn);
         }
     }
@@ -1985,6 +1987,18 @@ void metric_ss_stat_update(void)
     {
         prom_metric *m = prom_get(&metrics, &metric_ss_rx, 0);
         m->value = rx;
+    }
+
+    {
+        prom_label label_type = { "type", "remote" };
+        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 1, label_type);
+        m->value = remote_conn;
+    }
+
+    {
+        prom_label label_type = { "type", "server" };
+        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 1, label_type);
+        m->value = server_conn;
     }
 }
 
@@ -2649,6 +2663,7 @@ main(int argc, char **argv)
         prom_register(&metrics, &metric_peer_stats);
         prom_register(&metrics, &metric_ss_tx);
         prom_register(&metrics, &metric_ss_rx);
+        prom_register(&metrics, &metric_ss_conn);
 
         if (pthread_create(&tid_prom_server, NULL, prom_server_worker, &should_stop))
             FATAL("failed to create prometheus thread");
