@@ -72,6 +72,8 @@ typedef struct {
     char *plugin;
     char *plugin_opts;
     char *metric_port;
+    char *metric_conntrack;
+    char *metric_conncount;
     int fast_open;
     int reuse_port;
     int tcp_incoming_sndbuf;

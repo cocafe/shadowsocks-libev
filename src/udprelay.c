@@ -87,17 +87,17 @@ static void close_and_free_remote(EV_P_ remote_ctx_t *ctx);
 static remote_ctx_t *new_remote(int fd, server_ctx_t *server_ctx);
 
 #ifdef MODULE_REMOTE
-extern uint32_t metric_port;
 #include "peer.h"
-extern struct peer_tbl peer_tbl;
+extern struct hash_tbl peer_tbl;
+extern struct hash_tbl peer_conn_tbl;
+extern uint32_t metric_port;
+extern uint32_t metric_conntrack;
 #endif
 
-char *get_peer_name_from_addr(struct sockaddr_storage *addr)
+void get_peer_name_from_addr(char *peer_name, struct sockaddr_storage *addr)
 {
-    static char peer_name[INET6_ADDRSTRLEN] = { 0 };
-
-    if (!addr)
-        return NULL;
+    if (!peer_name || !addr)
+        return;
 
     if (addr->ss_family == AF_INET) {
         struct sockaddr_in *s = (struct sockaddr_in *)addr;
@@ -106,8 +106,6 @@ char *get_peer_name_from_addr(struct sockaddr_storage *addr)
         struct sockaddr_in6 *s = (struct sockaddr_in6 *)addr;
         inet_ntop(AF_INET6, &s->sin6_addr, peer_name, INET6_ADDRSTRLEN);
     }
-
-    return peer_name;
 }
 
 #ifdef __ANDROID__
@@ -978,13 +976,25 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 #ifdef MODULE_REMOTE
     if (metric_port != 0) {
         struct peer *peer = NULL;
-        char *peer_name = get_peer_name_from_addr(&remote_ctx->src_addr);
-        if (peer_name)
-            peer = peer_get(&peer_tbl, peer_name);
+        char peer_name[INET6_ADDRSTRLEN + 2] = { };
+        get_peer_name_from_addr(peer_name, &remote_ctx->src_addr);
 
+        peer = peer_get(&peer_tbl, peer_name);
         if (peer && !peer_lock(peer)) {
             peer->traffic_udp.rx += s;
             peer_unlock(peer);
+        }
+        
+        if (metric_conntrack) {
+            struct peer_conn *pconn = NULL;
+            char remote_name[INET6_ADDRSTRLEN + 2] = { };
+
+            get_peer_name_from_addr(remote_name, &remote_ctx->dst_addr);
+
+            pconn = peer_conn_get(&peer_conn_tbl, peer_name, remote_name);
+            if (pconn) {
+                pconn->stats[PEER_CONN_STAT_UDP_RX] += s;
+            }
         }
     }
 #endif // MODULE_REMOTE
@@ -1016,6 +1026,9 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 
 #ifdef MODULE_REMOTE
     struct peer *peer = NULL;
+    struct peer_conn *pconn = NULL;
+    char peer_name[INET6_ADDRSTRLEN + 2] = { };
+    char remote_name[INET6_ADDRSTRLEN + 2] = { };
 #endif
 
 #ifdef MODULE_REDIR
@@ -1058,9 +1071,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 
 #ifdef MODULE_REMOTE
     if (metric_port != 0) {
-        char *peer_name = get_peer_name_from_addr(&src_addr);
-        if (peer_name) {
-            peer = peer_create_or_update(&peer_tbl, peer_name);
+        char peer_name[INET6_ADDRSTRLEN + 2] = { };
+        
+        get_peer_name_from_addr(peer_name, &src_addr);
+
+        if (peer_name[0] != '\0') {
+            peer = peer_create_or_get(&peer_tbl, peer_name);
         } else {
             LOGE("[udp] failed to get peer name");
         }
@@ -1247,9 +1263,20 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
 #ifdef MODULE_REMOTE
-    if (peer && !peer_lock(peer)) {
-        peer->stats[PEER_STAT_UDP_CONN]++;;
-        peer_unlock(peer);
+    if (metric_port != 0) {
+        if (metric_conntrack) {
+            get_peer_name_from_addr(remote_name, &dst_addr);
+
+            pconn = peer_conn_create_or_get(&peer_conn_tbl, peer_name, remote_name);
+            if (pconn) {
+                pconn->stats[PEER_CONN_STAT_UDP_CONN]++;
+            }
+        }
+
+        if (peer && !peer_lock(peer)) {
+            peer->stats[PEER_STAT_UDP_CONN]++;
+            peer_unlock(peer);
+        }
     }
 #endif // MODULE_REMOTE
 
@@ -1490,9 +1517,15 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             }
 
 #ifdef MODULE_REMOTE
-            if (peer && !peer_lock(peer)) {
-                peer->traffic_udp.tx += s;
-                peer_unlock(peer);
+            if (metric_port != 0) {                
+                if (pconn) {
+                    pconn->stats[PEER_CONN_STAT_UDP_TX] += s;
+                }
+
+                if (peer && !peer_lock(peer)) {
+                    peer->traffic_udp.tx += s;
+                    peer_unlock(peer);
+                }
             }
 #endif
         }

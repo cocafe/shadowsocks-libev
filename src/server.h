@@ -81,6 +81,7 @@ typedef struct server {
     buffer_t *buf;
 
     char *peer_name;
+    char *remote_name;
 
     cipher_ctx_t *e_ctx;
     cipher_ctx_t *d_ctx;

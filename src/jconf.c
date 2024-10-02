@@ -46,6 +46,8 @@ to_string(const json_value *value)
         return ss_strndup(value->u.string.ptr, value->u.string.length);
     } else if (value->type == json_integer) {
         return strdup(ss_itoa(value->u.integer));
+    } else if (value->type == json_boolean) {
+        return strdup(ss_itoa(value->u.boolean));
     } else if (value->type == json_null) {
         return NULL;
     } else {
@@ -371,6 +373,10 @@ read_jconf(const char *file)
                 conf.manager_address = to_string(value);
             } else if (strcmp(name, "metric_port") == 0) {
                 conf.metric_port = to_string(value);
+            } else if (strcmp(name, "metric_conntrack") == 0) {
+                conf.metric_conntrack = to_string(value);
+            } else if (strcmp(name, "metric_conncount") == 0) {
+                conf.metric_conncount = to_string(value);
             }
         }
     } else {
