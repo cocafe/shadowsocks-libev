@@ -18,6 +18,10 @@ enum {
     PEER_STAT_UDP_FRAG,
     PEER_STAT_UDP_INVALID,
     PEER_STAT_TCP_INVALID,
+    PEER_STAT_TCP_TX,
+    PEER_STAT_TCP_RX,
+    PEER_STAT_UDP_TX,
+    PEER_STAT_UDP_RX,
     NUM_PEER_STATS,
 };
 
@@ -25,18 +29,7 @@ struct peer {
     pthread_mutex_t lck;
     uint32_t destroy;
     struct timespec ts;
-
     char *host;
-
-    struct {
-        uint64_t tx;
-        uint64_t rx;
-    } traffic;
-    struct {
-        uint64_t tx;
-        uint64_t rx;
-    } traffic_udp;
-
     uint64_t stats[NUM_PEER_STATS];
 };
 

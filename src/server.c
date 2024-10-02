@@ -103,13 +103,17 @@ static char ss_port_udp[16] = { };
 #include "peer.h"
 
 static char *label_peer_stats[] = {
-    [PEER_STAT_TCP_UNAUTH] = "tcp_unauth",
-    [PEER_STAT_UDP_UNAUTH] = "udp_unauth",
-    [PEER_STAT_TCP_CONN] = "tcp_conn",
-    [PEER_STAT_UDP_CONN] = "udp_conn",
-    [PEER_STAT_UDP_FRAG] = "udp_frag",
+    [PEER_STAT_TCP_UNAUTH]  = "tcp_unauth",
+    [PEER_STAT_UDP_UNAUTH]  = "udp_unauth",
+    [PEER_STAT_TCP_CONN]    = "tcp_conn",
+    [PEER_STAT_UDP_CONN]    = "udp_conn",
+    [PEER_STAT_UDP_FRAG]    = "udp_frag",
     [PEER_STAT_UDP_INVALID] = "udp_invalid",
     [PEER_STAT_TCP_INVALID] = "tcp_invalid",
+    [PEER_STAT_TCP_TX]      = "tcp_tx",
+    [PEER_STAT_TCP_RX]      = "tcp_rx",
+    [PEER_STAT_UDP_TX]      = "udp_tx",
+    [PEER_STAT_UDP_RX]      = "udp_rx",
 };
 
 struct hash_tbl peer_tbl;
@@ -1049,7 +1053,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         if (metric_port != 0 && s > 0) {
             peer = peer_get(&peer_tbl, server->peer_name);
             if (peer && !peer_lock(peer)) {
-                peer->traffic.tx += s;
+                peer->stats[PEER_STAT_TCP_TX] += s;
                 peer_unlock(peer);
             }
 
@@ -1231,7 +1235,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             peer = peer_create_or_get(&peer_tbl, server->peer_name);
             if (peer && !peer_lock(peer)) {
                 peer->stats[PEER_STAT_TCP_CONN]++;;
-                peer->traffic.tx += r;
+                peer->stats[PEER_STAT_TCP_TX] += r;
                 peer_unlock(peer);
             }
 
@@ -1299,7 +1303,7 @@ void peer_rx_count(server_t *server, ssize_t bytes)
     peer = peer_get(&peer_tbl, server->peer_name);
 
     if (peer && !peer_lock(peer)) {
-        peer->traffic.rx += bytes;
+        peer->stats[PEER_STAT_TCP_RX] += bytes;
         peer_unlock(peer);
     }
 }
@@ -1979,24 +1983,24 @@ void metric_peer_txrx_update(struct peer *peer)
     prom_label label_tcp = { "proto", "tcp" };
     prom_label label_udp = { "proto", "udp" };
 
-    if (ss_port[0] != '\0' && peer->traffic.tx) {
+    if (ss_port[0] != '\0' && peer->stats[PEER_STAT_TCP_TX]) {
         prom_metric *m = prom_get(&metrics, &metric_peer_tx, 3, label_peer, label_port, label_tcp);
-        m->value = peer->traffic.tx;
+        m->value = peer->stats[PEER_STAT_TCP_TX];
     }
 
-    if (ss_port[0] != '\0' && peer->traffic.rx) {
+    if (ss_port[0] != '\0' && peer->stats[PEER_STAT_TCP_RX]) {
         prom_metric *m = prom_get(&metrics, &metric_peer_rx, 3, label_peer, label_port, label_tcp);
-        m->value = peer->traffic.rx;
+        m->value = peer->stats[PEER_STAT_TCP_RX];
     }
 
-    if (ss_port_udp[0] != '\0' && peer->traffic_udp.tx) {
+    if (ss_port_udp[0] != '\0' && peer->stats[PEER_STAT_UDP_TX]) {
         prom_metric *m = prom_get(&metrics, &metric_peer_tx, 3, label_peer, label_port_udp, label_udp);
-        m->value = peer->traffic_udp.tx;
+        m->value = peer->stats[PEER_STAT_UDP_TX];
     }
 
-    if (ss_port_udp[0] != '\0' && peer->traffic_udp.rx) {
+    if (ss_port_udp[0] != '\0' && peer->stats[PEER_STAT_UDP_RX]) {
         prom_metric *m = prom_get(&metrics, &metric_peer_rx, 3, label_peer, label_port_udp, label_udp);
-        m->value = peer->traffic_udp.rx;
+        m->value = peer->stats[PEER_STAT_UDP_RX];
     }
 }
 

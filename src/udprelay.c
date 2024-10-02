@@ -981,7 +981,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 
         peer = peer_get(&peer_tbl, peer_name);
         if (peer && !peer_lock(peer)) {
-            peer->traffic_udp.rx += s;
+            peer->stats[PEER_STAT_UDP_RX] += s;
             peer_unlock(peer);
         }
         
@@ -1523,7 +1523,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 }
 
                 if (peer && !peer_lock(peer)) {
-                    peer->traffic_udp.tx += s;
+                    peer->stats[PEER_STAT_UDP_TX] += s;
                     peer_unlock(peer);
                 }
             }
