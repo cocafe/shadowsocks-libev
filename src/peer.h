@@ -52,7 +52,6 @@ enum {
 struct peer_conn {
     char *peer;
     char *remote;
-    char *key;
     uint64_t stats[NUM_PEER_CONN_STATS];
 };
 
@@ -73,17 +72,14 @@ static inline struct peer_conn *peer_conn_create(char *peer, char *remote)
 
     p->peer = ss_malloc(strlen(peer) + 2);
     p->remote = ss_malloc(strlen(remote) + 2);
-    p->key = ss_malloc(strlen(peer) + strlen(remote) + 2);
-    if (!p->peer || !p->remote || !p->key)
+    if (!p->peer || !p->remote)
         goto free;
 
     memset(p->peer, '\0', strlen(peer) + 2);
     memset(p->remote, '\0', strlen(remote) + 2);
-    memset(p->key, '\0', strlen(peer) + strlen(remote) + 2);
 
     memcpy(p->peer, peer, strlen(peer));
     memcpy(p->remote, remote, strlen(remote));
-    peer_conn_make_key(p->key, peer, remote);
 
     return p;
 
@@ -93,9 +89,6 @@ free:
 
     if (p->remote)
         ss_free(p->remote);
-
-    if (p->key)
-        ss_free(p->key);
 
     ss_free(p);
 
@@ -109,9 +102,6 @@ static inline int peer_conn_free(struct peer_conn *p)
 
     if (p->remote)
         ss_free(p->remote);
-
-    if (p->key)
-        ss_free(p->key);
 
     ss_free(p);
 
