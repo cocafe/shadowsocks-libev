@@ -1419,9 +1419,9 @@ resolv_cb(struct sockaddr *addr, void *data)
         LOGE("unable to resolve %s", query->hostname);
         close_and_free_server(EV_A_ server);
     } else {
-        if (verbose) {
-            LOGI("successfully resolved %s", query->hostname);
-        }
+        // if (verbose) {
+        //     LOGI("successfully resolved %s", query->hostname);
+        // }
 
         struct addrinfo info;
         memset(&info, 0, sizeof(struct addrinfo));

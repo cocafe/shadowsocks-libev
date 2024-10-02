@@ -251,9 +251,9 @@ dns_query_v4_cb(void *arg, int status, int timeouts, struct hostent *he)
         goto CLEANUP;
     }
 
-    if (verbose) {
-        LOGI("found address name v4 address %s", he->h_name);
-    }
+    // if (verbose) {
+    //     LOGI("found address name v4 address %s", he->h_name);
+    // }
 
     n = 0;
     while (he->h_addr_list[n])
@@ -313,9 +313,9 @@ dns_query_v6_cb(void *arg, int status, int timeouts, struct hostent *he)
         goto CLEANUP;
     }
 
-    if (verbose) {
-        LOGI("found address name v6 address %s", he->h_name);
-    }
+    // if (verbose) {
+    //     LOGI("found address name v6 address %s", he->h_name);
+    // }
 
     n = 0;
     while (he->h_addr_list[n])
