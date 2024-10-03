@@ -1984,22 +1984,22 @@ void metric_peer_txrx_update(struct peer *peer)
     prom_label label_tcp = { "proto", "tcp" };
     prom_label label_udp = { "proto", "udp" };
 
-    if (ss_port[0] != '\0' && peer->stats[PEER_STAT_TCP_TX]) {
+    if (peer->stats[PEER_STAT_TCP_TX] && peer->stats[PEER_STAT_TCP_CONN]) {
         prom_metric *m = prom_get(&metrics, &metric_peer_tx, 3, label_peer, label_port, label_tcp);
         m->value = peer->stats[PEER_STAT_TCP_TX];
     }
 
-    if (ss_port[0] != '\0' && peer->stats[PEER_STAT_TCP_RX]) {
+    if (peer->stats[PEER_STAT_TCP_RX] && peer->stats[PEER_STAT_TCP_CONN]) {
         prom_metric *m = prom_get(&metrics, &metric_peer_rx, 3, label_peer, label_port, label_tcp);
         m->value = peer->stats[PEER_STAT_TCP_RX];
     }
 
-    if (ss_port_udp[0] != '\0' && peer->stats[PEER_STAT_UDP_TX]) {
+    if (peer->stats[PEER_STAT_UDP_TX] && peer->stats[PEER_STAT_UDP_CONN]) {
         prom_metric *m = prom_get(&metrics, &metric_peer_tx, 3, label_peer, label_port_udp, label_udp);
         m->value = peer->stats[PEER_STAT_UDP_TX];
     }
 
-    if (ss_port_udp[0] != '\0' && peer->stats[PEER_STAT_UDP_RX]) {
+    if (peer->stats[PEER_STAT_UDP_RX] && peer->stats[PEER_STAT_UDP_CONN]) {
         prom_metric *m = prom_get(&metrics, &metric_peer_rx, 3, label_peer, label_port_udp, label_udp);
         m->value = peer->stats[PEER_STAT_UDP_RX];
     }
