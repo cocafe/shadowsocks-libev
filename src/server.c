@@ -93,8 +93,8 @@ static prom_metric_def metric_peer = { "ss_peer", "Peer", PROM_METRIC_TYPE_GAUGE
 static prom_metric_def metric_peer_tx = { "ss_peer_tx", "Peer TX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_rx = { "ss_peer_rx", "Peer RX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_stats = { "ss_peer_stat", "Peer stats", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_peer_conn = { "ss_peer_conn", "Peer connection bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_conncnt = { "ss_peer_conncnt", "Peer connection count", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_peer_connbyte = { "ss_peer_connbyte", "Peer connection bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_set metrics;
 
 static char ss_port[16] = { };
@@ -2010,7 +2010,15 @@ void metric_peer_stats_update(struct peer *peer)
     prom_label label_peer = { "peer", peer->host };
 
     for (size_t i = 0; i < ARRAY_SIZE(peer->stats); i++) {
-        if (peer->stats[i] > 0) {
+        switch (i) {
+        case PEER_STAT_TCP_TX:
+        case PEER_STAT_TCP_RX:
+        case PEER_STAT_UDP_TX:
+        case PEER_STAT_UDP_RX:
+            continue;
+        }
+
+        if (peer->stats[i] > 0 && label_peer_stats[i]) {
             prom_label label_stat = { "stat", label_peer_stats[i] };
             prom_metric *m = prom_get(&metrics, &metric_peer_stats, 2, label_peer, label_stat);
             m->value = peer->stats[i];
@@ -2055,13 +2063,13 @@ void metric_peer_conn_bytes_update(struct peer_conn *conn)
 
     if (conn->stats[PEER_CONN_STAT_TCP_TX] + conn->stats[PEER_CONN_STAT_TCP_RX]) {
         prom_label label_port = { "srv_port", ss_port };
-        prom_metric *m = prom_get(&metrics, &metric_peer_connbyte, 4, label_peer, label_remote, label_tcp, label_port );
+        prom_metric *m = prom_get(&metrics, &metric_peer_conn, 4, label_peer, label_remote, label_tcp, label_port );
         m->value = conn->stats[PEER_CONN_STAT_TCP_TX] + conn->stats[PEER_CONN_STAT_TCP_RX];
     }
 
     if (conn->stats[PEER_CONN_STAT_UDP_TX] + conn->stats[PEER_CONN_STAT_UDP_RX]) {
         prom_label label_port = { "srv_port", ss_port_udp };
-        prom_metric *m = prom_get(&metrics, &metric_peer_connbyte, 4, label_peer, label_remote, label_udp, label_port);
+        prom_metric *m = prom_get(&metrics, &metric_peer_conn, 4, label_peer, label_remote, label_udp, label_port);
         m->value = conn->stats[PEER_CONN_STAT_UDP_TX] + conn->stats[PEER_CONN_STAT_UDP_RX];
     }
 }
@@ -2814,7 +2822,7 @@ main(int argc, char **argv)
 
         if (metric_conntrack) {
             hash_tbl_init(&peer_conn_tbl);
-            prom_register(&metrics, &metric_peer_connbyte);
+            prom_register(&metrics, &metric_peer_conn);
 
             if (metric_conncount)
                 prom_register(&metrics, &metric_peer_conncnt);
