@@ -1036,7 +1036,11 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     int err = crypto->decrypt(buf, server->d_ctx, SOCKET_BUF_SIZE);
 
     if (err == CRYPTO_ERROR) {
-        report_addr(server->fd, PEER_STAT_TCP_UNAUTH, "authentication error");
+        if (server->stage == STAGE_STREAM)
+            report_addr(server->fd, PEER_STAT_TCP_INVALID, "decryption failure");
+        else
+            report_addr(server->fd, PEER_STAT_TCP_UNAUTH, "authentication error");
+
         stop_server(EV_A_ server);
         return;
     } else if (err == CRYPTO_NEED_MORE) {
