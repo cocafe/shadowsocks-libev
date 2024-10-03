@@ -733,8 +733,7 @@ connect_to_remote(EV_P_ struct addrinfo *res,
         }
 
         if (outbound_block_match_host(ipstr) == 1) {
-            if (verbose)
-                LOGI("outbound blocked %s", ipstr);
+            LOGI("outbound blocked %s", ipstr);
             return NULL;
         }
     }
@@ -1257,7 +1256,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             remote_t *remote = connect_to_remote(EV_A_ & info, server);
 
             if (remote == NULL) {
-                LOGE("connect error");
+                // LOGE("connect error");
                 close_and_free_server(EV_A_ server);
                 return;
             } else {
