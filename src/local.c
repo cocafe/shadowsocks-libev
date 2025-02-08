@@ -989,7 +989,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         stat_update_cb();
 #endif
         int err = crypto->decrypt(server->buf, server->d_ctx, SOCKET_BUF_SIZE);
-        if (err == CRYPTO_ERROR) {
+        if (err == CRYPTO_ERROR || err == CRYPTO_SALT) {
             LOGE("invalid password or cipher");
             close_and_free_remote(EV_A_ remote);
             close_and_free_server(EV_A_ server);

@@ -61,6 +61,7 @@ typedef mbedtls_md_info_t digest_type_t;
 
 #define ADDRTYPE_MASK 0xF
 
+#define CRYPTO_SALT      -3
 #define CRYPTO_ERROR     -2
 #define CRYPTO_NEED_MORE -1
 #define CRYPTO_OK         0

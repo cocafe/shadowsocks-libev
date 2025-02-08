@@ -462,7 +462,7 @@ aead_decrypt_all(buffer_t *ciphertext, cipher_t *cipher, size_t capacity)
 
     if (ppbloom_check((void *)salt, salt_len) == 1) {
         LOGE("crypto: AEAD: repeat salt detected");
-        return CRYPTO_ERROR;
+        return CRYPTO_SALT;
     }
 
     aead_cipher_ctx_set_key(&cipher_ctx, 0);
@@ -655,7 +655,7 @@ aead_decrypt(buffer_t *ciphertext, cipher_ctx_t *cipher_ctx, size_t capacity)
 
         if (ppbloom_check((void *)cipher_ctx->salt, salt_len) == 1) {
             LOGE("crypto: AEAD: repeat salt detected");
-            return CRYPTO_ERROR;
+            return CRYPTO_SALT;
         }
 
         aead_cipher_ctx_set_key(cipher_ctx, 0);
@@ -697,7 +697,7 @@ aead_decrypt(buffer_t *ciphertext, cipher_ctx_t *cipher_ctx, size_t capacity)
     if (cipher_ctx->init == 1) {
         if (ppbloom_check((void *)cipher_ctx->salt, salt_len) == 1) {
             LOGE("crypto: AEAD: repeat salt detected");
-            return CRYPTO_ERROR;
+            return CRYPTO_SALT;
         }
         ppbloom_add((void *)cipher_ctx->salt, salt_len);
         cipher_ctx->init = 2;

@@ -68,6 +68,7 @@ typedef struct {
     char *key;
     char *method;
     char *timeout;
+    char *udp_timeout;
     char *user;
     char *plugin;
     char *plugin_opts;

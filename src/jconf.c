@@ -260,6 +260,8 @@ read_jconf(const char *file)
                 conf.method = to_string(value);
             } else if (strcmp(name, "timeout") == 0) {
                 conf.timeout = to_string(value);
+            } else if (strcmp(name, "udp_timeout") == 0) {
+                conf.udp_timeout = to_string(value);
             } else if (strcmp(name, "user") == 0) {
                 conf.user = to_string(value);
             } else if (strcmp(name, "plugin") == 0) {

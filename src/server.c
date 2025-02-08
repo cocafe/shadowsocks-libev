@@ -103,17 +103,19 @@ static char ss_port_udp[16] = { };
 #include "peer.h"
 
 static char *label_peer_stats[] = {
-    [PEER_STAT_TCP_UNAUTH]  = "tcp_unauth",
-    [PEER_STAT_UDP_UNAUTH]  = "udp_unauth",
-    [PEER_STAT_TCP_CONN]    = "tcp_conn",
-    [PEER_STAT_UDP_CONN]    = "udp_conn",
-    [PEER_STAT_UDP_FRAG]    = "udp_frag",
-    [PEER_STAT_UDP_INVALID] = "udp_invalid",
-    [PEER_STAT_TCP_INVALID] = "tcp_invalid",
-    [PEER_STAT_TCP_TX]      = "tcp_tx",
-    [PEER_STAT_TCP_RX]      = "tcp_rx",
-    [PEER_STAT_UDP_TX]      = "udp_tx",
-    [PEER_STAT_UDP_RX]      = "udp_rx",
+    [PEER_STAT_TCP_UNAUTH]      = "tcp_unauth",
+    [PEER_STAT_UDP_UNAUTH]      = "udp_unauth",
+    [PEER_STAT_TCP_CONN]        = "tcp_conn",
+    [PEER_STAT_UDP_CONN]        = "udp_conn",
+    [PEER_STAT_UDP_FRAG]        = "udp_frag",
+    [PEER_STAT_UDP_INVALID]     = "udp_invalid",
+    [PEER_STAT_TCP_INVALID]     = "tcp_invalid",
+    [PEER_STAT_TCP_TX]          = "tcp_tx",
+    [PEER_STAT_TCP_RX]          = "tcp_rx",
+    [PEER_STAT_UDP_TX]          = "udp_tx",
+    [PEER_STAT_UDP_RX]          = "udp_rx",
+    [PEER_STAT_OUTBOUND_BANNED] = "outbound_ban",
+    [PEER_STAT_CRYPTO_SALT]     = "crypto_salt",
 };
 
 struct hash_tbl peer_tbl;
@@ -733,6 +735,14 @@ connect_to_remote(EV_P_ struct addrinfo *res,
         }
 
         if (outbound_block_match_host(ipstr) == 1) {
+            struct peer *peer = NULL;
+
+            peer = peer_get(&peer_tbl, server->peer_name);
+            if (peer && !peer_lock(peer)) {
+                peer->stats[PEER_STAT_OUTBOUND_BANNED]++;
+                peer_unlock(peer);
+            }
+
             LOGI("outbound blocked %s", ipstr);
             return NULL;
         }
@@ -1034,11 +1044,15 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 
     int err = crypto->decrypt(buf, server->d_ctx, SOCKET_BUF_SIZE);
 
-    if (err == CRYPTO_ERROR) {
-        if (server->stage == STAGE_STREAM)
-            report_addr(server->fd, PEER_STAT_TCP_INVALID, "decryption failure");
-        else
-            report_addr(server->fd, PEER_STAT_TCP_UNAUTH, "authentication error");
+    if (err == CRYPTO_ERROR || err == CRYPTO_SALT) {
+        if (err == CRYPTO_ERROR) {
+            if (server->stage == STAGE_STREAM)
+                report_addr(server->fd, PEER_STAT_TCP_INVALID, "decryption failure");
+            else
+                report_addr(server->fd, PEER_STAT_TCP_UNAUTH, "authentication error");
+        } else if (err == CRYPTO_SALT) {
+            report_addr(server->fd, PEER_STAT_CRYPTO_SALT, "crypto salt failure");
+        }
 
         stop_server(EV_A_ server);
         return;
@@ -2185,6 +2199,7 @@ main(int argc, char **argv)
     char *password  = NULL;
     char *key       = NULL;
     char *timeout   = NULL;
+    char *udp_timeout = NULL;
     char *method    = NULL;
     char *pid_path  = NULL;
     char *conf_path = NULL;
@@ -2473,6 +2488,9 @@ main(int argc, char **argv)
             LOGI("initializing acl...");
             acl = !init_acl(conf->acl);
         }
+        if (udp_timeout == NULL) {
+            udp_timeout = conf->udp_timeout;
+        }
     }
 
     if (tcp_incoming_sndbuf != 0 && tcp_incoming_sndbuf < SOCKET_BUF_SIZE) {
@@ -2751,6 +2769,7 @@ main(int argc, char **argv)
         for (int i = 0; i < server_num; i++) {
             const char *host = server_addr[i].host;
             const char *port;
+            char *_timeout = udp_timeout ? udp_timeout : timeout;
 
             if (server_udp_port)
                 port = server_udp_port;
@@ -2767,7 +2786,7 @@ main(int argc, char **argv)
             else
                 LOGI("udp server listening at %s:%s", host ? host : "0.0.0.0", port);
             // Setup UDP
-            int err = init_udprelay(host, port, mtu, crypto, atoi(timeout), iface);
+            int err = init_udprelay(host, port, mtu, crypto, atoi(_timeout), iface);
             if (err == -1)
                 continue;
             num_listen_ctx++;
