@@ -163,7 +163,7 @@ get_sockaddr(char *host, char *port,
         int err = getaddrinfo(host, port, &hints, &result);
 
         if (err != 0) {
-            LOGE("getaddrinfo: %s", gai_strerror(err));
+            LOGE("getaddrinfo: host: %s port: %s, %s", host, port, gai_strerror(err));
             return -1;
         }
 
@@ -312,4 +312,21 @@ is_ipv6only(ss_addr_t *servers, size_t server_num, int ipv6first)
         }
     }
     return 1;
+}
+
+char *print_sockaddr(struct sockaddr_storage *addr)
+{
+    static char ip_addr[INET6_ADDRSTRLEN] = { 0 };
+
+    memset(ip_addr, 0x00, sizeof(ip_addr));
+
+    if (addr->ss_family == AF_INET) {
+        struct sockaddr_in *s = (struct sockaddr_in *)addr;
+        inet_ntop(AF_INET, &s->sin_addr, ip_addr, INET_ADDRSTRLEN);
+    } else if (addr->ss_family == AF_INET6) {
+        struct sockaddr_in6 *s = (struct sockaddr_in6 *)addr;
+        inet_ntop(AF_INET6, &s->sin6_addr, ip_addr, INET6_ADDRSTRLEN);
+    }
+
+    return ip_addr;
 }

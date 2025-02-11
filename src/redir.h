@@ -22,6 +22,8 @@
 #ifndef _REDIR_H
 #define _REDIR_H
 
+#include <time.h>
+
 #ifdef HAVE_LIBEV_EV_H
 #include <libev/ev.h>
 #else
@@ -31,6 +33,12 @@
 #include "crypto.h"
 #include "jconf.h"
 
+#define millis() (uint64_t)({                                           \
+                        struct timespec _ts;                            \
+                        clock_gettime(CLOCK_MONOTONIC, &_ts);           \
+                        _ts.tv_sec * 1000 + _ts.tv_nsec / (1000 * 1000); \
+                        })
+
 typedef struct listen_ctx {
     ev_io io;
     int remote_num;
@@ -39,6 +47,7 @@ typedef struct listen_ctx {
     int mptcp;
     int tos;
     struct sockaddr **remote_addr;
+    uint64_t **remote_last_resolve_ts;
 } listen_ctx_t;
 
 typedef struct server_ctx {

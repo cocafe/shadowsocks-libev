@@ -111,6 +111,8 @@ static struct ev_signal sigint_watcher;
 static struct ev_signal sigterm_watcher;
 static struct ev_signal sigchld_watcher;
 
+static uint64_t remote_name_resolve_intv_ms = 600 * 1000;
+
 static int tcp_tproxy = 0; /* use tproxy instead of redirect (for tcp) */
 
 static int
@@ -159,7 +161,7 @@ create_and_bind(const char *addr, const char *port)
 
     s = getaddrinfo(addr, port, &hints, &result);
     if (s != 0) {
-        LOGI("getaddrinfo: %s", gai_strerror(s));
+        LOGI("getaddrinfo: addr: %s port: %s, %s", addr, port, gai_strerror(s));
         return -1;
     }
 
@@ -756,7 +758,7 @@ accept_cb(EV_P_ ev_io *w, int revents)
 
     err = getdestaddr(serverfd, &destaddr);
     if (err) {
-        ERROR("getdestaddr");
+        LOGE("getdestaddr: %s, %s", print_sockaddr(&destaddr), strerror(errno));
         return;
     }
 
@@ -777,23 +779,27 @@ accept_cb(EV_P_ ev_io *w, int revents)
 
     int index = rand() % listener->remote_num;
 
-    if (listener->remote_addr[index]) {
-        char *host = g_remote_addr[index].host;
-        char *port = g_remote_addr[index].port;
-        struct sockaddr_storage *storage = ss_malloc(sizeof(struct sockaddr_storage));
-        memset(storage, 0, sizeof(struct sockaddr_storage));
-        if (get_sockaddr(host, port, storage, 1, ipv6first) == -1)  {
-            if (listener->remote_addr[index] == NULL)
-                FATAL("failed to resolve remote hostname, abort");
-            else
-                ERROR("failed to resolve latest remote hostname");
+    if (remote_name_resolve_intv_ms > 0) {
+        if (listener->remote_last_resolve_ts[index] &&
+            (millis() - *listener->remote_last_resolve_ts[index] >= remote_name_resolve_intv_ms)) {
+            char *host = g_remote_addr[index].host;
+            char *port = g_remote_addr[index].port;
+            struct sockaddr_storage *storage = ss_malloc(sizeof(struct sockaddr_storage));
+            memset(storage, 0, sizeof(struct sockaddr_storage));
+            if (get_sockaddr(host, port, storage, 1, ipv6first) == -1)  {
+                LOGE("failed to resolve latest remote hostname for %s", host);
+                ss_free(storage);
+            } else {
+                if (0 != memcmp(listener->remote_addr[index], storage, sizeof(struct sockaddr_storage))) {
+                    LOGE("remote %s new address: %s", host, print_sockaddr(storage));
+                }
 
-            ss_free(storage);
-        } else {
-            if (listener->remote_addr[index])
-                ss_free(listener->remote_addr[index]);
+                if (listener->remote_addr[index])
+                    ss_free(listener->remote_addr[index]);
 
-            listener->remote_addr[index] = (struct sockaddr *)storage;
+                listener->remote_addr[index] = (struct sockaddr *)storage;
+                *listener->remote_last_resolve_ts[index] = millis();
+            }
         }
     }
 
@@ -969,7 +975,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:huUTv6A",
+    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:huUTv6A",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -1069,6 +1075,9 @@ main(int argc, char **argv)
             exit(EXIT_SUCCESS);
         case '6':
             ipv6first = 1;
+            break;
+        case 'D':
+            remote_name_resolve_intv_ms = atoi(optarg);
             break;
         case 'A':
             FATAL("One time auth has been deprecated. Try AEAD ciphers instead.");
@@ -1318,7 +1327,9 @@ main(int argc, char **argv)
     memset(&listen_ctx, 0, sizeof(struct listen_ctx));
     listen_ctx.remote_num  = remote_num;
     listen_ctx.remote_addr = ss_malloc(sizeof(struct sockaddr *) * remote_num);
+    listen_ctx.remote_last_resolve_ts = ss_malloc(sizeof(uint64_t *) * remote_num);
     memset(listen_ctx.remote_addr, 0, sizeof(struct sockaddr *) * remote_num);
+    memset(listen_ctx.remote_last_resolve_ts, 0, sizeof(uint64_t *) * remote_num);
     for (i = 0; i < remote_num; i++) {
         char *host = g_remote_addr[i].host;
         g_remote_addr[i].port = g_remote_addr[i].port == NULL ? remote_port : g_remote_addr[i].port;
@@ -1329,10 +1340,14 @@ main(int argc, char **argv)
         }
         struct sockaddr_storage *storage = ss_malloc(sizeof(struct sockaddr_storage));
         memset(storage, 0, sizeof(struct sockaddr_storage));
+        LOGI("resolving remote address...");
         if (get_sockaddr(host, port, storage, 1, ipv6first) == -1) {
             FATAL("failed to resolve the provided hostname");
         }
+        LOGI("remote address %d: %s", i, print_sockaddr(storage));
         listen_ctx.remote_addr[i] = (struct sockaddr *)storage;
+        listen_ctx.remote_last_resolve_ts[i] = ss_malloc(sizeof(uint64_t));
+        *listen_ctx.remote_last_resolve_ts[i] = millis();
 
         if (plugin != NULL)
             break;
@@ -1414,6 +1429,7 @@ main(int argc, char **argv)
     for (i = 0; i < remote_num; i++)
         ss_free(listen_ctx.remote_addr[i]);
     ss_free(listen_ctx.remote_addr);
+    ss_free(listen_ctx.remote_last_resolve_ts);
 
     return ret_val;
 }
