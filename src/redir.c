@@ -968,6 +968,7 @@ main(int argc, char **argv)
         { "password",    required_argument, NULL, GETOPT_VAL_PASSWORD    },
         { "key",         required_argument, NULL, GETOPT_VAL_KEY         },
         { "help",        no_argument,       NULL, GETOPT_VAL_HELP        },
+        { "comment",     required_argument, NULL, GETOPT_VAL_DUMMY       },
         { NULL,          0,                 NULL, 0                      }
     };
 
@@ -1002,6 +1003,8 @@ main(int argc, char **argv)
             break;
         case GETOPT_VAL_KEY:
             key = optarg;
+            break;
+        case GETOPT_VAL_DUMMY:
             break;
         case GETOPT_VAL_REUSE_PORT:
             reuse_port = 1;
