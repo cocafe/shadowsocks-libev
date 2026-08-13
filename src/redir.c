@@ -30,6 +30,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <signal.h>
 #include <string.h>
 #include <strings.h>
@@ -52,6 +53,8 @@
 #include "utils.h"
 #include "common.h"
 #include "redir.h"
+#include "prometheus.h"
+#include "peer.h"
 
 #ifndef EAGAIN
 #define EAGAIN EWOULDBLOCK
@@ -115,6 +118,37 @@ static uint64_t remote_name_resolve_intv_ms = 600 * 1000;
 
 static int tcp_tproxy = 0; /* use tproxy instead of redirect (for tcp) */
 
+#ifndef PEER_CONN_IDLE_TIMEOUT
+#define PEER_CONN_IDLE_TIMEOUT 600
+#endif
+
+static time_t conn_clean_timeout = PEER_CONN_IDLE_TIMEOUT;
+
+static uint32_t metric_port = 0;
+static uint32_t metric_conntrack = 0;
+static uint32_t metric_conncount = 0;
+
+static sem_t sem_prom_update;
+static pthread_t tid_prom_server;
+static pthread_t tid_prom_update;
+
+static prom_metric_def metric_ss_tx = { "ss_tx", "Total TX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_rx = { "ss_rx", "Total RX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_conn = { "ss_conn", "Connection count", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_conn_tx = { "ss_conn_tx", "Connection TX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_conn_rx = { "ss_conn_rx", "Connection RX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_conn_cnt = { "ss_conn_cnt", "Per-connection count", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_set metrics;
+
+static struct hash_tbl conn_tbl;
+
+static char local_port_str[16] = { };
+
+static int remote_conn = 0;
+static int local_conn = 0;
+static uint64_t tx_bytes = 0;
+static uint64_t rx_bytes = 0;
+
 static int
 getdestaddr(int fd, struct sockaddr_storage *destaddr)
 {
@@ -134,6 +168,153 @@ getdestaddr(int fd, struct sockaddr_storage *destaddr)
         return -1;
     }
     return 0;
+}
+
+static int
+format_local_addr(int fd, char *buf, size_t len)
+{
+    struct sockaddr_storage addr;
+    socklen_t socklen = sizeof(struct sockaddr_storage);
+
+    memset(&addr, 0, socklen);
+
+    if (getpeername(fd, (struct sockaddr *)&addr, &socklen) != 0)
+        return -1;
+
+    if (addr.ss_family == AF_INET) {
+        struct sockaddr_in *s = (struct sockaddr_in *)&addr;
+        char ip[INET_ADDRSTRLEN] = { 0 };
+        if (!inet_ntop(AF_INET, &s->sin_addr, ip, sizeof(ip)))
+            return -1;
+        snprintf(buf, len, "%s:%u", ip, ntohs(s->sin_port));
+        return 0;
+    } else if (addr.ss_family == AF_INET6) {
+        struct sockaddr_in6 *s = (struct sockaddr_in6 *)&addr;
+        char ip[INET6_ADDRSTRLEN] = { 0 };
+        if (!inet_ntop(AF_INET6, &s->sin6_addr, ip, sizeof(ip)))
+            return -1;
+        snprintf(buf, len, "[%s]:%u", ip, ntohs(s->sin6_port));
+        return 0;
+    }
+
+    return -1;
+}
+
+static int
+format_destaddr(const struct sockaddr_storage *addr, char *buf, size_t len)
+{
+    if (addr->ss_family == AF_INET) {
+        struct sockaddr_in *sa = (struct sockaddr_in *)addr;
+        char ip[INET_ADDRSTRLEN] = { 0 };
+        if (!inet_ntop(AF_INET, &sa->sin_addr, ip, sizeof(ip)))
+            return -1;
+        snprintf(buf, len, "%s:%u", ip, ntohs(sa->sin_port));
+        return 0;
+    } else if (addr->ss_family == AF_INET6) {
+        struct sockaddr_in6 *sa = (struct sockaddr_in6 *)addr;
+        char ip[INET6_ADDRSTRLEN] = { 0 };
+        if (!inet_ntop(AF_INET6, &sa->sin6_addr, ip, sizeof(ip)))
+            return -1;
+        snprintf(buf, len, "[%s]:%u", ip, ntohs(sa->sin6_port));
+        return 0;
+    }
+
+    return -1;
+}
+
+static struct peer_conn *
+conn_get_or_create_locked(struct hash_tbl *tbl, char *local, char *remote)
+{
+    struct cork_hash_table_entry *entry;
+    struct peer_conn *conn;
+    char key[256] = { };
+    char *heap_key;
+
+    snprintf(key, sizeof(key), "%s|%s", local, remote);
+
+    entry = cork_hash_table_get_entry(tbl->tbl, key);
+    if (entry)
+        return entry->value;
+
+    heap_key = ss_malloc(strlen(key) + 1);
+    if (!heap_key)
+        return NULL;
+
+    strcpy(heap_key, key);
+
+    conn = peer_conn_create(local, remote);
+    if (!conn) {
+        ss_free(heap_key);
+        return NULL;
+    }
+
+    bool is_new = 0;
+    cork_hash_table_put(tbl->tbl, heap_key, conn, &is_new, NULL, NULL);
+
+    return conn;
+}
+
+static void
+conn_tx_add(server_t *server, ssize_t bytes)
+{
+    struct peer_conn *conn;
+
+    if (metric_port == 0 || metric_conntrack == 0)
+        return;
+
+    if (!server->local_name || !server->remote_name)
+        return;
+
+    pthread_spin_lock(&conn_tbl.lck);
+    conn = conn_get_or_create_locked(&conn_tbl, server->local_name,
+                                     server->remote_name);
+    if (conn) {
+        conn->stats[PEER_CONN_STAT_TCP_TX] += bytes;
+        clock_gettime(CLOCK_REALTIME, &conn->ts);
+    }
+    pthread_spin_unlock(&conn_tbl.lck);
+}
+
+static void
+conn_rx_add(server_t *server, ssize_t bytes)
+{
+    struct peer_conn *conn;
+
+    if (metric_port == 0 || metric_conntrack == 0)
+        return;
+
+    if (!server->local_name || !server->remote_name)
+        return;
+
+    pthread_spin_lock(&conn_tbl.lck);
+    conn = conn_get_or_create_locked(&conn_tbl, server->local_name,
+                                     server->remote_name);
+    if (conn) {
+        conn->stats[PEER_CONN_STAT_TCP_RX] += bytes;
+        clock_gettime(CLOCK_REALTIME, &conn->ts);
+    }
+    pthread_spin_unlock(&conn_tbl.lck);
+}
+
+static void
+conn_count_add(server_t *server)
+{
+    struct peer_conn *conn;
+
+    if (metric_port == 0 || metric_conntrack == 0)
+        return;
+
+    if (!server->local_name || !server->remote_name)
+        return;
+
+    pthread_spin_lock(&conn_tbl.lck);
+    conn = conn_get_or_create_locked(&conn_tbl, server->local_name,
+                                     server->remote_name);
+    if (conn) {
+        conn->stats[PEER_CONN_STAT_TCP_CONN]++;
+        clock_gettime(CLOCK_REALTIME, &conn->ts);
+    }
+    pthread_spin_unlock(&conn_tbl.lck);
 }
 
 int
@@ -256,6 +437,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     remote->buf->len += r;
+    tx_bytes += r;
+    conn_tx_add(server, r);
 
     if (verbose) {
         uint16_t port = 0;
@@ -424,6 +607,8 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     server->buf->len = r;
+    rx_bytes += r;
+    conn_rx_add(server, r);
 
     int err = crypto->decrypt(server->buf, server->d_ctx, SOCKET_BUF_SIZE);
     if (err == CRYPTO_ERROR || err == CRYPTO_SALT) {
@@ -624,6 +809,8 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
 static remote_t *
 new_remote(int fd, int timeout)
 {
+    remote_conn++;
+
     remote_t *remote = ss_malloc(sizeof(remote_t));
     memset(remote, 0, sizeof(remote_t));
 
@@ -671,12 +858,15 @@ close_and_free_remote(EV_P_ remote_t *remote)
         ev_io_stop(EV_A_ & remote->recv_ctx->io);
         close(remote->fd);
         free_remote(remote);
+        remote_conn--;
     }
 }
 
 static server_t *
 new_server(int fd)
 {
+    local_conn++;
+
     server_t *server = ss_malloc(sizeof(server_t));
     memset(server, 0, sizeof(server_t));
 
@@ -724,6 +914,10 @@ free_server(server_t *server)
         bfree(server->buf);
         ss_free(server->buf);
     }
+    if (server->local_name)
+        ss_free(server->local_name);
+    if (server->remote_name)
+        ss_free(server->remote_name);
     ss_free(server->recv_ctx);
     ss_free(server->send_ctx);
     ss_free(server);
@@ -738,6 +932,7 @@ close_and_free_server(EV_P_ server_t *server)
         ev_timer_stop(EV_A_ & server->delayed_connect_watcher);
         close(server->fd);
         free_server(server);
+        local_conn--;
     }
 }
 
@@ -880,6 +1075,22 @@ accept_cb(EV_P_ ev_io *w, int revents)
     remote->server   = server;
     server->destaddr = destaddr;
 
+    if (metric_port != 0 && metric_conntrack != 0) {
+        char local_name[INET6_ADDRSTRLEN + 16] = { 0 };
+        if (format_local_addr(serverfd, local_name, sizeof(local_name)) == 0) {
+            server->local_name = ss_malloc(strlen(local_name) + 1);
+            strcpy(server->local_name, local_name);
+        }
+
+        char remote_name[INET6_ADDRSTRLEN + 16] = { 0 };
+        if (format_destaddr(&destaddr, remote_name, sizeof(remote_name)) == 0) {
+            server->remote_name = ss_malloc(strlen(remote_name) + 1);
+            strcpy(server->remote_name, remote_name);
+        }
+    }
+
+    conn_count_add(server);
+
     if (fast_open) {
         // save remote addr for fast open
         remote->addr = remote_addr;
@@ -922,6 +1133,232 @@ signal_cb(EV_P_ ev_signal *w, int revents)
     }
 }
 
+static void *
+prom_server_worker(void *arg)
+{
+    int *should_stop = arg;
+
+    LOGI("metric server running at %s:%u", "0.0.0.0", metric_port);
+
+    if (prom_start_server(&metrics, metric_port, should_stop) < 0)
+        FATAL("failed to start prometheus metric server");
+
+    return NULL;
+}
+
+static void
+metric_ss_stat_update(void)
+{
+    {
+        prom_metric *m = prom_get(&metrics, &metric_ss_tx, 0);
+        m->value = tx_bytes;
+    }
+
+    {
+        prom_metric *m = prom_get(&metrics, &metric_ss_rx, 0);
+        m->value = rx_bytes;
+    }
+
+    {
+        prom_label label_type = { "type", "remote" };
+        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 1, label_type);
+        m->value = remote_conn;
+    }
+
+    {
+        prom_label label_type = { "type", "local" };
+        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 1, label_type);
+        m->value = local_conn;
+    }
+}
+
+static int
+metric_conn_match(prom_metric *m, struct peer_conn *conn)
+{
+    if (m->num_labels != 4)
+        return 0;
+
+    if (strcmp(m->labels[0].key, "local") || strcmp(m->labels[0].value, conn->peer))
+        return 0;
+    if (strcmp(m->labels[1].key, "remote") || strcmp(m->labels[1].value, conn->remote))
+        return 0;
+    if (strcmp(m->labels[2].key, "proto") || strcmp(m->labels[2].value, "tcp"))
+        return 0;
+    if (strcmp(m->labels[3].key, "local_port") || strcmp(m->labels[3].value, local_port_str))
+        return 0;
+
+    return 1;
+}
+
+static int
+metric_conn_def(prom_metric_def *d)
+{
+    if (d == &metric_conn_tx || d == &metric_conn_rx)
+        return 1;
+
+    if (metric_conncount && d == &metric_conn_cnt)
+        return 1;
+
+    return 0;
+}
+
+static void
+metric_conn_del(struct peer_conn *conn)
+{
+    for (int i = 0; i < metrics.n_defs; i++) {
+        prom_metric_def_set *ds = metrics.defs[i];
+        prom_metric *m, *n;
+
+        if (!metric_conn_def(ds->def))
+            continue;
+
+        list_for_each_entry_safe(m, n, &ds->metrics, node) {
+            if (metric_conn_match(m, conn))
+                prom_del(m);
+        }
+    }
+}
+
+static void
+metric_conn_txrx_update(struct peer_conn *conn)
+{
+    prom_label label_local = { "local", conn->peer };
+    prom_label label_remote = { "remote", conn->remote };
+    prom_label label_tcp = { "proto", "tcp" };
+    prom_label label_port = { "local_port", local_port_str };
+
+    if (conn->stats[PEER_CONN_STAT_TCP_TX]) {
+        prom_metric *m = prom_get(&metrics, &metric_conn_tx, 4,
+                                  label_local, label_remote, label_tcp, label_port);
+        m->value = conn->stats[PEER_CONN_STAT_TCP_TX];
+    }
+
+    if (conn->stats[PEER_CONN_STAT_TCP_RX]) {
+        prom_metric *m = prom_get(&metrics, &metric_conn_rx, 4,
+                                  label_local, label_remote, label_tcp, label_port);
+        m->value = conn->stats[PEER_CONN_STAT_TCP_RX];
+    }
+}
+
+static void
+metric_conn_count_update(struct peer_conn *conn)
+{
+    prom_label label_local = { "local", conn->peer };
+    prom_label label_remote = { "remote", conn->remote };
+    prom_label label_tcp = { "proto", "tcp" };
+    prom_label label_port = { "local_port", local_port_str };
+
+    if (conn->stats[PEER_CONN_STAT_TCP_CONN]) {
+        prom_metric *m = prom_get(&metrics, &metric_conn_cnt, 4,
+                                  label_local, label_remote, label_tcp, label_port);
+        m->value = conn->stats[PEER_CONN_STAT_TCP_CONN];
+    }
+}
+
+static void
+metric_conn_update(struct hash_tbl *tbl)
+{
+    struct cork_hash_table_entry *entry = NULL;
+    struct cork_hash_table_iterator iter = {};
+
+    pthread_spin_lock(&tbl->lck);
+
+    cork_hash_table_iterator_init(tbl->tbl, &iter);
+
+    while ((entry = cork_hash_table_iterator_next(&iter)) != NULL) {
+        struct peer_conn *conn = entry->value;
+
+        metric_conn_txrx_update(conn);
+
+        if (metric_conncount)
+            metric_conn_count_update(conn);
+    }
+
+    pthread_spin_unlock(&tbl->lck);
+}
+
+static enum cork_hash_table_map_result
+conn_tbl_cleanup_mapper(void *user_data, struct cork_hash_table_entry *entry)
+{
+    struct timespec *now = user_data;
+    struct peer_conn *conn = entry->value;
+
+    if (now->tv_sec - conn->ts.tv_sec >= conn_clean_timeout) {
+        metric_conn_del(conn);
+        free(entry->key);
+        peer_conn_free(conn);
+        return CORK_HASH_TABLE_MAP_DELETE;
+    }
+
+    return CORK_HASH_TABLE_MAP_CONTINUE;
+}
+
+static void
+conn_tbl_cleanup(struct hash_tbl *tbl)
+{
+    struct timespec now = {};
+
+    clock_gettime(CLOCK_REALTIME, &now);
+
+    pthread_spin_lock(&tbl->lck);
+    cork_hash_table_map(tbl->tbl, &now, conn_tbl_cleanup_mapper);
+    pthread_spin_unlock(&tbl->lck);
+}
+
+static enum cork_hash_table_map_result
+conn_tbl_deinit_mapper(void *user_data, struct cork_hash_table_entry *entry)
+{
+    struct peer_conn *conn = entry->value;
+
+    (void)user_data;
+
+    metric_conn_del(conn);
+    free(entry->key);
+    peer_conn_free(conn);
+    return CORK_HASH_TABLE_MAP_DELETE;
+}
+
+static void
+conn_tbl_deinit(struct hash_tbl *tbl)
+{
+    pthread_spin_lock(&tbl->lck);
+    cork_hash_table_map(tbl->tbl, NULL, conn_tbl_deinit_mapper);
+    cork_hash_table_free(tbl->tbl);
+    pthread_spin_unlock(&tbl->lck);
+    pthread_spin_destroy(&tbl->lck);
+}
+
+static void *
+prom_update_worker(void *arg)
+{
+    int *should_stop = arg;
+
+    sleep(1);
+
+    while (!*should_stop) {
+        struct timespec ts = { };
+
+        metric_ss_stat_update();
+
+        if (metric_conntrack) {
+            conn_tbl_cleanup(&conn_tbl);
+            metric_conn_update(&conn_tbl);
+        }
+
+        prom_flush(&metrics);
+
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 10;
+
+        if (sem_timedwait(&sem_prom_update, &ts) != 0) {
+            if (errno != ETIMEDOUT)
+                LOGI("sem_timedwait(): %d %s\n", errno, strerror(errno));
+        }
+    }
+
+    return NULL;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -931,6 +1368,7 @@ main(int argc, char **argv)
     int pid_flags    = 0;
     int mptcp        = 0;
     int mtu          = 0;
+    int should_stop  = 0;
     char *user       = NULL;
     char *local_port = NULL;
     char *local_addr = NULL;
@@ -940,6 +1378,9 @@ main(int argc, char **argv)
     char *method     = NULL;
     char *pid_path   = NULL;
     char *conf_path  = NULL;
+    char *str_metric_port = NULL;
+    char *str_metric_conntrack = NULL;
+    char *str_metric_conncount = NULL;
 
     char *plugin      = NULL;
     char *plugin_opts = NULL;
@@ -967,6 +1408,7 @@ main(int argc, char **argv)
         { "no-delay",    no_argument,       NULL, GETOPT_VAL_NODELAY     },
         { "password",    required_argument, NULL, GETOPT_VAL_PASSWORD    },
         { "key",         required_argument, NULL, GETOPT_VAL_KEY         },
+        { "conn-clean-timeout", required_argument, NULL, 'C'             },
         { "help",        no_argument,       NULL, GETOPT_VAL_HELP        },
         { "comment",     required_argument, NULL, GETOPT_VAL_DUMMY       },
         { NULL,          0,                 NULL, 0                      }
@@ -976,7 +1418,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:huUTv6A",
+    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:M:C:huUTv6A",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -1031,6 +1473,12 @@ main(int argc, char **argv)
             break;
         case 'l':
             local_port = optarg;
+            break;
+        case 'M':
+            str_metric_port = optarg;
+            break;
+        case 'C':
+            conn_clean_timeout = atoi(optarg);
             break;
         case GETOPT_VAL_PASSWORD:
         case 'k':
@@ -1113,6 +1561,15 @@ main(int argc, char **argv)
         }
         if (remote_port == NULL) {
             remote_port = conf->remote_port;
+        }
+        if (str_metric_port == NULL) {
+            str_metric_port = conf->metric_port;
+        }
+        if (str_metric_conntrack == NULL) {
+            str_metric_conntrack = conf->metric_conntrack;
+        }
+        if (str_metric_conncount == NULL) {
+            str_metric_conncount = conf->metric_conncount;
         }
         if (local_addr == NULL) {
             local_addr = conf->local_addr;
@@ -1360,6 +1817,8 @@ main(int argc, char **argv)
 
     struct ev_loop *loop = EV_DEFAULT;
 
+    strncpy(local_port_str, local_port, sizeof(local_port_str) - 1);
+
     listen_ctx_t *listen_ctx_current = &listen_ctx;
     do {
         if (listen_ctx_current->tos) {
@@ -1423,7 +1882,54 @@ main(int argc, char **argv)
         LOGI("running from root user");
     }
 
+    if (str_metric_port)
+        metric_port = atoi(str_metric_port);
+
+    if (str_metric_conntrack)
+        metric_conntrack = atoi(str_metric_conntrack);
+
+    if (str_metric_conncount)
+        metric_conncount = atoi(str_metric_conncount);
+
+    if (metric_port != 0) {
+        sem_init(&sem_prom_update, 0, 0);
+
+        prom_init(&metrics, metric_port);
+        prom_register(&metrics, &metric_ss_tx);
+        prom_register(&metrics, &metric_ss_rx);
+        prom_register(&metrics, &metric_ss_conn);
+
+        if (metric_conntrack) {
+            hash_tbl_init(&conn_tbl);
+            prom_register(&metrics, &metric_conn_tx);
+            prom_register(&metrics, &metric_conn_rx);
+
+            if (metric_conncount)
+                prom_register(&metrics, &metric_conn_cnt);
+        }
+
+        if (pthread_create(&tid_prom_server, NULL, prom_server_worker, &should_stop))
+            FATAL("failed to create prometheus thread");
+
+        if (pthread_create(&tid_prom_update, NULL, prom_update_worker, &should_stop))
+            FATAL("failed to create prometheus thread");
+    }
+
     ev_run(loop, 0);
+
+    should_stop = 1;
+
+    if (metric_port != 0) {
+        sem_post(&sem_prom_update);
+        pthread_cancel(tid_prom_server);
+        pthread_join(tid_prom_update, NULL);
+
+        if (metric_conntrack)
+            conn_tbl_deinit(&conn_tbl);
+
+        prom_cleanup(&metrics);
+        sem_destroy(&sem_prom_update);
+    }
 
     if (plugin != NULL) {
         stop_plugin();

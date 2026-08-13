@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <errno.h>
 
 #include "list.h"
 
@@ -109,11 +110,12 @@ void prom_metric_init(prom_metric *m)
         INIT_LIST_HEAD(&m->node);
 }
 
-// Sets a label key and value on the given metric value
+// Sets a label key and value on the given metric value.
+// The key and value strings are copied and owned by the metric.
 void prom_metric_set_label(prom_metric *m, char *key, char *value)
 {
-        m->labels[m->num_labels].key = key;
-        m->labels[m->num_labels].value = value;
+        m->labels[m->num_labels].key = strdup(key);
+        m->labels[m->num_labels].value = strdup(value);
         m->num_labels++;
 }
 
@@ -185,6 +187,13 @@ prom_metric *prom_get(prom_metric_set *s, prom_metric_def *d, int n, ...)
 
 void prom_del(prom_metric *m)
 {
+        for (int i = 0; i < m->num_labels; i++) {
+                if (m->labels[i].key)
+                        free(m->labels[i].key);
+                if (m->labels[i].value)
+                        free(m->labels[i].value);
+        }
+
         list_del(&m->node);
         free(m);
 }
@@ -274,6 +283,12 @@ void prom_cleanup(prom_metric_set *s)
 
                 // Free each metric pointer
                 list_for_each_entry_safe(m, n, &ds->metrics, node) {
+                        for (int l = 0; l < m->num_labels; l++) {
+                                if (m->labels[l].key)
+                                        free(m->labels[l].key);
+                                if (m->labels[l].value)
+                                        free(m->labels[l].value);
+                        }
                         list_del(&m->node);
                         free(m);
                 }

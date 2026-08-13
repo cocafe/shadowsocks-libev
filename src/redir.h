@@ -69,6 +69,9 @@ typedef struct server {
 
     struct sockaddr_storage destaddr;
     ev_timer delayed_connect_watcher;
+
+    char *local_name;
+    char *remote_name;
 } server_t;
 
 typedef struct remote_ctx {

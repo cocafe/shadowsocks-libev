@@ -55,6 +55,7 @@ struct peer_conn {
     char *peer;
     char *remote;
     uint64_t stats[NUM_PEER_CONN_STATS];
+    struct timespec ts;
 };
 
 static inline void peer_conn_make_key(char *key, char *peer, char *remote)
