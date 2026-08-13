@@ -186,14 +186,14 @@ format_local_addr(int fd, char *buf, size_t len)
         char ip[INET_ADDRSTRLEN] = { 0 };
         if (!inet_ntop(AF_INET, &s->sin_addr, ip, sizeof(ip)))
             return -1;
-        snprintf(buf, len, "%s:%u", ip, ntohs(s->sin_port));
+        snprintf(buf, len, "%s", ip);
         return 0;
     } else if (addr.ss_family == AF_INET6) {
         struct sockaddr_in6 *s = (struct sockaddr_in6 *)&addr;
         char ip[INET6_ADDRSTRLEN] = { 0 };
         if (!inet_ntop(AF_INET6, &s->sin6_addr, ip, sizeof(ip)))
             return -1;
-        snprintf(buf, len, "[%s]:%u", ip, ntohs(s->sin6_port));
+        snprintf(buf, len, "%s", ip);
         return 0;
     }
 
