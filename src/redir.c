@@ -142,7 +142,7 @@ static prom_metric_set metrics;
 
 static struct hash_tbl conn_tbl;
 
-static char local_port_str[16] = { };
+static char redir_port_str[16] = { };
 
 static int remote_conn = 0;
 static int local_conn = 0;
@@ -1184,7 +1184,7 @@ metric_conn_match(prom_metric *m, struct peer_conn *conn)
         return 0;
     if (strcmp(m->labels[2].key, "proto") || strcmp(m->labels[2].value, "tcp"))
         return 0;
-    if (strcmp(m->labels[3].key, "local_port") || strcmp(m->labels[3].value, local_port_str))
+    if (strcmp(m->labels[3].key, "redir_port") || strcmp(m->labels[3].value, redir_port_str))
         return 0;
 
     return 1;
@@ -1225,7 +1225,7 @@ metric_conn_txrx_update(struct peer_conn *conn)
     prom_label label_local = { "local", conn->peer };
     prom_label label_remote = { "remote", conn->remote };
     prom_label label_tcp = { "proto", "tcp" };
-    prom_label label_port = { "local_port", local_port_str };
+    prom_label label_port = { "redir_port", redir_port_str };
 
     if (conn->stats[PEER_CONN_STAT_TCP_TX]) {
         prom_metric *m = prom_get(&metrics, &metric_conn_tx, 4,
@@ -1246,7 +1246,7 @@ metric_conn_count_update(struct peer_conn *conn)
     prom_label label_local = { "local", conn->peer };
     prom_label label_remote = { "remote", conn->remote };
     prom_label label_tcp = { "proto", "tcp" };
-    prom_label label_port = { "local_port", local_port_str };
+    prom_label label_port = { "redir_port", redir_port_str };
 
     if (conn->stats[PEER_CONN_STAT_TCP_CONN]) {
         prom_metric *m = prom_get(&metrics, &metric_conn_cnt, 4,
@@ -1820,7 +1820,7 @@ main(int argc, char **argv)
 
     struct ev_loop *loop = EV_DEFAULT;
 
-    strncpy(local_port_str, local_port, sizeof(local_port_str) - 1);
+    strncpy(redir_port_str, local_port, sizeof(redir_port_str) - 1);
 
     listen_ctx_t *listen_ctx_current = &listen_ctx;
     do {
