@@ -1408,7 +1408,6 @@ main(int argc, char **argv)
         { "no-delay",    no_argument,       NULL, GETOPT_VAL_NODELAY     },
         { "password",    required_argument, NULL, GETOPT_VAL_PASSWORD    },
         { "key",         required_argument, NULL, GETOPT_VAL_KEY         },
-        { "conn-clean-timeout", required_argument, NULL, 'C'             },
         { "help",        no_argument,       NULL, GETOPT_VAL_HELP        },
         { "comment",     required_argument, NULL, GETOPT_VAL_DUMMY       },
         { NULL,          0,                 NULL, 0                      }
@@ -1418,7 +1417,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:M:C:huUTv6A",
+    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:M:C:JhuUTv6A",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -1479,6 +1478,10 @@ main(int argc, char **argv)
             break;
         case 'C':
             conn_clean_timeout = atoi(optarg);
+            break;
+        case 'J':
+            metric_conntrack = 1;
+            metric_conncount = 1;
             break;
         case GETOPT_VAL_PASSWORD:
         case 'k':
