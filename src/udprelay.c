@@ -994,6 +994,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
             pconn = peer_conn_get(&peer_conn_tbl, peer_name, remote_name);
             if (pconn) {
                 pconn->stats[PEER_CONN_STAT_UDP_RX] += s;
+                clock_gettime(CLOCK_REALTIME, &pconn->ts);
             }
         }
     }
@@ -1270,6 +1271,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             pconn = peer_conn_create_or_get(&peer_conn_tbl, peer_name, remote_name);
             if (pconn) {
                 pconn->stats[PEER_CONN_STAT_UDP_CONN]++;
+                clock_gettime(CLOCK_REALTIME, &pconn->ts);
             }
         }
 
@@ -1520,6 +1522,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             if (metric_port != 0) {                
                 if (pconn) {
                     pconn->stats[PEER_CONN_STAT_UDP_TX] += s;
+                    clock_gettime(CLOCK_REALTIME, &pconn->ts);
                 }
 
                 if (peer && !peer_lock(peer)) {

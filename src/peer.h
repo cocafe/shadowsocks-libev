@@ -116,6 +116,7 @@ static inline struct peer_conn *peer_conn_create_or_get(struct hash_tbl *tbl, ch
     struct cork_hash_table_entry *entry = NULL;
     struct peer_conn *conn;
     char key[256] = { };
+    char *heap_key;
 
     if (!tbl || !peer || !remote)
         return NULL;
@@ -131,7 +132,16 @@ static inline struct peer_conn *peer_conn_create_or_get(struct hash_tbl *tbl, ch
         if (!conn)
             goto out;
 
-        cork_hash_table_put(tbl->tbl, key, conn, &is_new, NULL, NULL);
+        heap_key = ss_malloc(strlen(key) + 1);
+        if (!heap_key) {
+            peer_conn_free(conn);
+            conn = NULL;
+            goto out;
+        }
+
+        strcpy(heap_key, key);
+
+        cork_hash_table_put(tbl->tbl, heap_key, conn, &is_new, NULL, NULL);
     } else {
         conn = entry->value;
     }

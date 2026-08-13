@@ -82,6 +82,12 @@ uint32_t metric_port = 0;
 uint32_t metric_conntrack = 0;
 static uint32_t metric_conncount = 0;
 
+#ifndef PEER_CONN_IDLE_TIMEOUT
+#define PEER_CONN_IDLE_TIMEOUT 600
+#endif
+
+static time_t conn_clean_timeout = PEER_CONN_IDLE_TIMEOUT;
+
 static sem_t sem_prom_update;
 static pthread_t tid_prom_server;
 static pthread_t tid_prom_update;
@@ -1078,6 +1084,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 pconn = peer_conn_get(&peer_conn_tbl, server->peer_name, server->remote_name);
                 if (pconn) {
                     pconn->stats[PEER_CONN_STAT_TCP_TX] += s;
+                    clock_gettime(CLOCK_REALTIME, &pconn->ts);
                 }
             }
         }
@@ -1262,6 +1269,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 if (pconn) {
                     pconn->stats[PEER_CONN_STAT_TCP_CONN]++;
                     pconn->stats[PEER_CONN_STAT_TCP_TX] += r;
+                    clock_gettime(CLOCK_REALTIME, &pconn->ts);
                 }
             }
         }
@@ -1336,6 +1344,7 @@ void peer_conn_rx_count(server_t *server, ssize_t bytes)
     conn = peer_conn_get(&peer_conn_tbl, server->peer_name, server->remote_name);
     if (conn) {
         conn->stats[PEER_CONN_STAT_TCP_RX] += bytes;
+        clock_gettime(CLOCK_REALTIME, &conn->ts);
     }
 }
 
@@ -2156,6 +2165,106 @@ void metric_ss_stat_update(void)
     }
 }
 
+static int
+metric_conn_match(prom_metric *m, struct peer_conn *conn)
+{
+    if (m->num_labels != 4)
+        return 0;
+
+    if (strcmp(m->labels[0].key, "peer") || strcmp(m->labels[0].value, conn->peer))
+        return 0;
+    if (strcmp(m->labels[1].key, "remote") || strcmp(m->labels[1].value, conn->remote))
+        return 0;
+    if (strcmp(m->labels[2].key, "proto"))
+        return 0;
+    if (strcmp(m->labels[3].key, "srv_port"))
+        return 0;
+    if (strcmp(m->labels[3].value, ss_port) && strcmp(m->labels[3].value, ss_port_udp))
+        return 0;
+
+    return 1;
+}
+
+static int
+metric_conn_def(prom_metric_def *d)
+{
+    if (d == &metric_peer_conn)
+        return 1;
+
+    if (metric_conncount && d == &metric_peer_conncnt)
+        return 1;
+
+    return 0;
+}
+
+static void
+metric_conn_del(struct peer_conn *conn)
+{
+    for (int i = 0; i < metrics.n_defs; i++) {
+        prom_metric_def_set *ds = metrics.defs[i];
+        prom_metric *m, *n;
+
+        if (!metric_conn_def(ds->def))
+            continue;
+
+        list_for_each_entry_safe(m, n, &ds->metrics, node) {
+            if (metric_conn_match(m, conn))
+                prom_del(m);
+        }
+    }
+}
+
+static enum cork_hash_table_map_result
+conn_tbl_cleanup_mapper(void *user_data, struct cork_hash_table_entry *entry)
+{
+    struct timespec *now = user_data;
+    struct peer_conn *conn = entry->value;
+
+    if (now->tv_sec - conn->ts.tv_sec >= conn_clean_timeout) {
+        metric_conn_del(conn);
+        free(entry->key);
+        peer_conn_free(conn);
+        return CORK_HASH_TABLE_MAP_DELETE;
+    }
+
+    return CORK_HASH_TABLE_MAP_CONTINUE;
+}
+
+static void
+conn_tbl_cleanup(struct hash_tbl *tbl)
+{
+    struct timespec now = {};
+
+    clock_gettime(CLOCK_REALTIME, &now);
+
+    pthread_spin_lock(&tbl->lck);
+    cork_hash_table_map(tbl->tbl, &now, conn_tbl_cleanup_mapper);
+    pthread_spin_unlock(&tbl->lck);
+}
+
+static enum cork_hash_table_map_result
+conn_tbl_deinit_mapper(void *user_data, struct cork_hash_table_entry *entry)
+{
+    struct peer_conn *conn = entry->value;
+
+    (void)user_data;
+
+    metric_conn_del(conn);
+    free(entry->key);
+    peer_conn_free(conn);
+    return CORK_HASH_TABLE_MAP_DELETE;
+}
+
+static void
+conn_tbl_deinit(struct hash_tbl *tbl)
+{
+    pthread_spin_lock(&tbl->lck);
+    cork_hash_table_map(tbl->tbl, NULL, conn_tbl_deinit_mapper);
+    cork_hash_table_free(tbl->tbl);
+    pthread_spin_unlock(&tbl->lck);
+    pthread_spin_destroy(&tbl->lck);
+}
+
 void *prom_update_worker(void *arg)
 {
     int *should_stop = arg;
@@ -2167,8 +2276,10 @@ void *prom_update_worker(void *arg)
 
         metric_peer_update(&peer_tbl);
 
-        if (metric_conntrack)
+        if (metric_conntrack) {
+            conn_tbl_cleanup(&peer_conn_tbl);
             metric_peer_conn_update(&peer_conn_tbl);
+        }
 
         metric_ss_stat_update();
 
@@ -2239,6 +2350,7 @@ main(int argc, char **argv)
         { "plugin-opts",     required_argument, NULL, GETOPT_VAL_PLUGIN_OPTS },
         { "password",        required_argument, NULL, GETOPT_VAL_PASSWORD    },
         { "key",             required_argument, NULL, GETOPT_VAL_KEY         },
+        { "conn-clean-timeout", required_argument, NULL, 'C'                 },
 #ifdef __linux__
         { "mptcp",           no_argument,       NULL, GETOPT_VAL_MPTCP       },
 #ifdef USE_NFTABLES
@@ -2252,7 +2364,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:P:l:k:t:m:b:c:i:d:a:n:M:huUv6A",
+    while ((c = getopt_long(argc, argv, "f:s:p:P:l:k:t:m:b:c:i:d:a:n:M:C:huUv6A",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -2323,6 +2435,9 @@ main(int argc, char **argv)
             break;
         case 'M':
             str_metric_port = optarg;
+            break;
+        case 'C':
+            conn_clean_timeout = atoi(optarg);
             break;
         case GETOPT_VAL_PASSWORD:
         case 'k':
@@ -2870,13 +2985,14 @@ main(int argc, char **argv)
         sem_post(&sem_prom_update);
         pthread_cancel(tid_prom_server);
         pthread_join(tid_prom_update, NULL);
+
+        if (metric_conntrack)
+            conn_tbl_deinit(&peer_conn_tbl);
+
         prom_cleanup(&metrics);
         sem_destroy(&sem_prom_update);
 
         hash_tbl_deinit(&peer_tbl);
-
-        if (metric_conntrack)
-            hash_tbl_deinit(&peer_conn_tbl);
     }
 
 #ifndef __MINGW32__
