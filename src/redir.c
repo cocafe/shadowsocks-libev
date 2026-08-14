@@ -1152,24 +1152,28 @@ static void
 metric_ss_stat_update(void)
 {
     {
-        prom_metric *m = prom_get(&metrics, &metric_ss_tx, 0);
+        prom_label label_port = { "redir_port", redir_port_str };
+        prom_metric *m = prom_get(&metrics, &metric_ss_tx, 1, label_port);
         m->value = tx_bytes;
     }
 
     {
-        prom_metric *m = prom_get(&metrics, &metric_ss_rx, 0);
+        prom_label label_port = { "redir_port", redir_port_str };
+        prom_metric *m = prom_get(&metrics, &metric_ss_rx, 1, label_port);
         m->value = rx_bytes;
     }
 
     {
         prom_label label_type = { "type", "remote" };
-        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 1, label_type);
+        prom_label label_port = { "redir_port", redir_port_str };
+        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 2, label_type, label_port);
         m->value = remote_conn;
     }
 
     {
         prom_label label_type = { "type", "local" };
-        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 1, label_type);
+        prom_label label_port = { "redir_port", redir_port_str };
+        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 2, label_type, label_port);
         m->value = local_conn;
     }
 }
@@ -1418,8 +1422,8 @@ main(int argc, char **argv)
         { "password",    required_argument, NULL, GETOPT_VAL_PASSWORD    },
         { "key",         required_argument, NULL, GETOPT_VAL_KEY         },
         { "prom-remote-addr", required_argument, NULL, 'R'               },
-        { "prom-remote-port", required_argument, NULL, 'P'               },
-        { "prom-remote-job",  required_argument, NULL, 'J'               },
+        { "prom-remote-port", required_argument, NULL, 'Q'               },
+        { "prom-remote-instance", required_argument, NULL, 'J'           },
         { "help",        no_argument,       NULL, GETOPT_VAL_HELP        },
         { "comment",     required_argument, NULL, GETOPT_VAL_DUMMY       },
         { NULL,          0,                 NULL, 0                      }
@@ -1429,7 +1433,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:M:C:R:P:J:huUTv6Aj",
+    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:M:C:R:Q:J:huUTv6Aj",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -1494,11 +1498,11 @@ main(int argc, char **argv)
         case 'R':
             prom_remote_set_addr(optarg);
             break;
-        case 'P':
+        case 'Q':
             prom_remote_set_port((uint16_t)atoi(optarg));
             break;
         case 'J':
-            prom_remote_set_job(optarg);
+            prom_remote_set_instance(optarg);
             break;
         case 'j':
             metric_conncount = 1;

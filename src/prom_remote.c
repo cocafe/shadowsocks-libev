@@ -18,7 +18,7 @@
 
 static char prom_remote_addr[256];
 static uint16_t prom_remote_port;
-static char prom_remote_job[64];
+static char prom_remote_instance[64];
 
 void
 prom_remote_set_addr(const char *addr)
@@ -33,9 +33,9 @@ prom_remote_set_port(uint16_t port)
 }
 
 void
-prom_remote_set_job(const char *job)
+prom_remote_set_instance(const char *instance)
 {
-    snprintf(prom_remote_job, sizeof(prom_remote_job), "%s", job ? job : "");
+    snprintf(prom_remote_instance, sizeof(prom_remote_instance), "%s", instance ? instance : "");
 }
 
 int
@@ -194,7 +194,7 @@ prom_remote_build_body(prom_metric_set *s, uint8_t **out, size_t *out_len)
             size_t n_labels;
             size_t l = 0;
 
-            n_labels = 1 + (prom_remote_job[0] ? 1 : 0) + m->num_labels;
+            n_labels = 1 + (prom_remote_instance[0] ? 1 : 0) + m->num_labels;
 
             t           = calloc(1, sizeof(*t));
             labels      = calloc(n_labels, sizeof(*labels));
@@ -217,10 +217,10 @@ prom_remote_build_body(prom_metric_set *s, uint8_t **out, size_t *out_len)
             label_ptrs[l]   = &labels[l];
             l++;
 
-            if (prom_remote_job[0]) {
+            if (prom_remote_instance[0]) {
                 labels[l] = (Prometheus__Label)PROMETHEUS__LABEL__INIT;
-                labels[l].name  = "job";
-                labels[l].value = prom_remote_job;
+                labels[l].name  = "instance";
+                labels[l].value = prom_remote_instance;
                 label_ptrs[l]   = &labels[l];
                 l++;
             }

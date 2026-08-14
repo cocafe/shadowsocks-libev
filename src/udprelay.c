@@ -92,6 +92,7 @@ extern struct hash_tbl peer_tbl;
 extern struct hash_tbl peer_conn_tbl;
 extern uint32_t metric_port;
 extern uint32_t metric_conntrack;
+extern int metrics_enabled;
 #endif
 
 void get_peer_name_from_addr(char *peer_name, struct sockaddr_storage *addr)
@@ -974,7 +975,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
 #ifdef MODULE_REMOTE
-    if (metric_port != 0) {
+    if (metrics_enabled) {
         struct peer *peer = NULL;
         char peer_name[INET6_ADDRSTRLEN + 2] = { };
         get_peer_name_from_addr(peer_name, &remote_ctx->src_addr);
@@ -1071,7 +1072,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                  0, (struct sockaddr *)&src_addr, &src_addr_len);
 
 #ifdef MODULE_REMOTE
-    if (metric_port != 0) {
+    if (metrics_enabled) {
         char peer_name[INET6_ADDRSTRLEN + 2] = { };
         
         get_peer_name_from_addr(peer_name, &src_addr);
@@ -1093,7 +1094,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         LOGI("[udp] server_recv_recvfrom fragmentation, MTU at least be: " SSIZE_FMT, r + PACKET_HEADER_SIZE);
 
 #ifdef MODULE_REMOTE
-        if (metric_port != 0) {
+        if (metrics_enabled) {
             if (peer && !peer_lock(peer)) {
                 peer->stats[PEER_STAT_UDP_FRAG]++;
                 peer_unlock(peer);
@@ -1118,7 +1119,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 get_addr_str((struct sockaddr *)&src_addr, false), "suspicious UDP packet");
         // drop the packet silently
 
-        if (metric_port != 0) {
+        if (metrics_enabled) {
             if (peer && !peer_lock(peer)) {
                 peer->stats[PEER_STAT_UDP_UNAUTH]++;
                 peer_unlock(peer);
@@ -1264,7 +1265,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
 #ifdef MODULE_REMOTE
-    if (metric_port != 0) {
+    if (metrics_enabled) {
         if (metric_conntrack) {
             get_peer_name_from_addr(remote_name, &dst_addr);
 
@@ -1440,7 +1441,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         }
 
 #ifdef MODULE_REMOTE
-        if (metric_port != 0) {
+        if (metrics_enabled) {
             if (peer && !peer_lock(peer)) {
                 peer->stats[PEER_STAT_UDP_FRAG]++;
                 peer_unlock(peer);
@@ -1519,7 +1520,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             }
 
 #ifdef MODULE_REMOTE
-            if (metric_port != 0) {                
+            if (metrics_enabled) {                
                 if (pconn) {
                     pconn->stats[PEER_CONN_STAT_UDP_TX] += s;
                     clock_gettime(CLOCK_REALTIME, &pconn->ts);

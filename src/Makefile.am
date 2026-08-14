@@ -60,6 +60,9 @@ ss_tunnel_SOURCES = tunnel.c \
 
 ss_server_SOURCES = resolv.c \
                     server.c \
+                    prom_remote.c \
+                    prompb/types-v1.pb-c.c \
+                    prompb/remote-v1.pb-c.c \
                     $(common_src) \
                     $(crypto_src) \
                     $(plugin_src) \
@@ -78,6 +81,7 @@ ss_manager_LDADD = $(SS_COMMON_LIBS)
 ss_local_LDADD += -lcares
 ss_tunnel_LDADD += -lcares
 ss_server_LDADD += -lcares
+ss_server_LDADD += -lprotobuf-c -lsnappy
 ss_manager_LDADD += -lcares
 
 ss_local_CFLAGS = $(AM_CFLAGS) -DMODULE_LOCAL

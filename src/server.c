@@ -77,10 +77,12 @@ enum datatypes {
 #include "resolv.h"
 
 #include "prometheus.h"
+#include "prom_remote.h"
 
 uint32_t metric_port = 0;
 uint32_t metric_conntrack = 0;
 static uint32_t metric_conncount = 0;
+int metrics_enabled = 0;
 
 #ifndef PEER_CONN_IDLE_TIMEOUT
 #define PEER_CONN_IDLE_TIMEOUT 600
@@ -552,7 +554,7 @@ static void report_addr(int fd, int peer_stat, const char *info)
         LOGE("failed to handshake with %s: %s", peer_name, info);
     }
 
-    if (metric_port != 0) {
+    if (metrics_enabled) {
         if (peer_stat >= 0 && peer_stat < NUM_PEER_STATS) {
             peer = peer_create_or_get(&peer_tbl, peer_name);
             if (peer && !peer_lock(peer)) {
@@ -1073,7 +1075,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     if (server->stage == STAGE_STREAM) {
         int s = send(remote->fd, remote->buf->data, remote->buf->len, 0);
 
-        if (metric_port != 0 && s > 0) {
+        if (metrics_enabled && s > 0) {
             peer = peer_get(&peer_tbl, server->peer_name);
             if (peer && !peer_lock(peer)) {
                 peer->stats[PEER_STAT_TCP_TX] += s;
@@ -1255,7 +1257,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             server->remote_name = remote_name;
         }
 
-        if (metric_port != 0) {
+        if (metrics_enabled) {
             peer = peer_create_or_get(&peer_tbl, server->peer_name);
             if (peer && !peer_lock(peer)) {
                 peer->stats[PEER_STAT_TCP_CONN]++;
@@ -1323,7 +1325,7 @@ void peer_rx_count(server_t *server, ssize_t bytes)
 {
     struct peer *peer = NULL;
 
-    if (metric_port == 0)
+    if (!metrics_enabled)
         return;
 
     peer = peer_get(&peer_tbl, server->peer_name);
@@ -1338,7 +1340,7 @@ void peer_conn_rx_count(server_t *server, ssize_t bytes)
 {
     struct peer_conn *conn = NULL;
 
-    if (metric_port == 0 || metric_conntrack == 0)
+    if (!metrics_enabled || metric_conntrack == 0)
         return;
 
     conn = peer_conn_get(&peer_conn_tbl, server->peer_name, server->remote_name);
@@ -2283,7 +2285,14 @@ void *prom_update_worker(void *arg)
 
         metric_ss_stat_update();
 
-        prom_flush(&metrics);
+        if (metric_port != 0)
+            prom_flush(&metrics);
+
+        if (prom_remote_enabled()) {
+            int err = prom_remote_write(&metrics);
+            if (err)
+                LOGI("prometheus remote write failed: %s", strerror(-err));
+        }
 
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec += 10;
@@ -2351,6 +2360,9 @@ main(int argc, char **argv)
         { "password",        required_argument, NULL, GETOPT_VAL_PASSWORD    },
         { "key",             required_argument, NULL, GETOPT_VAL_KEY         },
         { "conn-clean-timeout", required_argument, NULL, 'C'                 },
+        { "prom-remote-addr", required_argument, NULL, 'R'                   },
+        { "prom-remote-port", required_argument, NULL, 'Q'                   },
+        { "prom-remote-instance", required_argument, NULL, 'J'               },
 #ifdef __linux__
         { "mptcp",           no_argument,       NULL, GETOPT_VAL_MPTCP       },
 #ifdef USE_NFTABLES
@@ -2364,7 +2376,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:P:l:k:t:m:b:c:i:d:a:n:M:C:huUv6A",
+    while ((c = getopt_long(argc, argv, "f:s:p:P:l:k:t:m:b:c:i:d:a:n:M:C:R:Q:J:huUv6A",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -2438,6 +2450,15 @@ main(int argc, char **argv)
             break;
         case 'C':
             conn_clean_timeout = atoi(optarg);
+            break;
+        case 'R':
+            prom_remote_set_addr(optarg);
+            break;
+        case 'Q':
+            prom_remote_set_port((uint16_t)atoi(optarg));
+            break;
+        case 'J':
+            prom_remote_set_instance(optarg);
             break;
         case GETOPT_VAL_PASSWORD:
         case 'k':
@@ -2943,12 +2964,16 @@ main(int argc, char **argv)
         metric_conncount = atoi(str_metric_conncount);
 
     int should_stop = 0;
-    if (metric_port != 0) {
+    metrics_enabled = metric_port != 0 || prom_remote_enabled();
+
+    if (metrics_enabled) {
         hash_tbl_init(&peer_tbl);
 
         sem_init(&sem_prom_update, 0, 0);
 
-        prom_init(&metrics, metric_port);
+        if (metric_port != 0)
+            prom_init(&metrics, metric_port);
+
         prom_register(&metrics, &metric_ss_tx);
         prom_register(&metrics, &metric_ss_rx);
         prom_register(&metrics, &metric_ss_conn);
@@ -2965,8 +2990,10 @@ main(int argc, char **argv)
                 prom_register(&metrics, &metric_peer_conncnt);
         }
 
-        if (pthread_create(&tid_prom_server, NULL, prom_server_worker, &should_stop))
-            FATAL("failed to create prometheus thread");
+        if (metric_port != 0) {
+            if (pthread_create(&tid_prom_server, NULL, prom_server_worker, &should_stop))
+                FATAL("failed to create prometheus thread");
+        }
 
         if (pthread_create(&tid_prom_update, NULL, prom_update_worker, &should_stop))
             FATAL("failed to create prometheus thread");
@@ -2981,9 +3008,10 @@ main(int argc, char **argv)
         LOGI("closed gracefully");
     }
 
-    if (metric_port != 0) {
+    if (metrics_enabled) {
         sem_post(&sem_prom_update);
-        pthread_cancel(tid_prom_server);
+        if (metric_port != 0)
+            pthread_cancel(tid_prom_server);
         pthread_join(tid_prom_update, NULL);
 
         if (metric_conntrack)
