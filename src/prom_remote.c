@@ -211,12 +211,14 @@ prom_remote_build_body(prom_metric_set *s, uint8_t **out, size_t *out_len)
                 goto out;
             }
 
+            labels[l] = (Prometheus__Label)PROMETHEUS__LABEL__INIT;
             labels[l].name  = "__name__";
             labels[l].value = ds->def->name;
             label_ptrs[l]   = &labels[l];
             l++;
 
             if (prom_remote_job[0]) {
+                labels[l] = (Prometheus__Label)PROMETHEUS__LABEL__INIT;
                 labels[l].name  = "job";
                 labels[l].value = prom_remote_job;
                 label_ptrs[l]   = &labels[l];
@@ -224,11 +226,13 @@ prom_remote_build_body(prom_metric_set *s, uint8_t **out, size_t *out_len)
             }
 
             for (int k = 0; k < m->num_labels; k++, l++) {
+                labels[l] = (Prometheus__Label)PROMETHEUS__LABEL__INIT;
                 labels[l].name  = m->labels[k].key;
                 labels[l].value = m->labels[k].value;
                 label_ptrs[l]   = &labels[l];
             }
 
+            *sample = (Prometheus__Sample)PROMETHEUS__SAMPLE__INIT;
             sample->has_value     = 1;
             sample->value         = m->value;
             sample->has_timestamp = 1;

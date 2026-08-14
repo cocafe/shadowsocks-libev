@@ -1429,7 +1429,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:M:C:R:P:J:huUTv6A",
+    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:M:C:R:P:J:huUTv6Aj",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
