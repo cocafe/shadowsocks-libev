@@ -134,12 +134,12 @@ static sem_t sem_prom_update;
 static pthread_t tid_prom_server;
 static pthread_t tid_prom_update;
 
-static prom_metric_def metric_ss_tx = { "ss_tx", "Total TX bytes", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_ss_rx = { "ss_rx", "Total RX bytes", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_ss_conn = { "ss_conn", "Connection count", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_conn_tx = { "ss_conn_tx", "Connection TX bytes", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_conn_rx = { "ss_conn_rx", "Connection RX bytes", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_conn_cnt = { "ss_conn_cnt", "Per-connection count", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_tx = { "ss_redir_tx", "Total TX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_rx = { "ss_redir_rx", "Total RX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_conn = { "ss_redir_conn", "Connection count", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_conn_tx = { "ss_redir_conn_tx", "Connection TX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_conn_rx = { "ss_redir_conn_rx", "Connection RX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_conn_cnt = { "ss_redir_conn_cnt", "Per-connection count", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_set metrics;
 
 static struct hash_tbl conn_tbl;

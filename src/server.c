@@ -94,9 +94,9 @@ static sem_t sem_prom_update;
 static pthread_t tid_prom_server;
 static pthread_t tid_prom_update;
 
-static prom_metric_def metric_ss_tx = { "ss_tx", "Total TX bytes", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_ss_rx = { "ss_rx", "Total RX bytes", PROM_METRIC_TYPE_COUNTER };
-static prom_metric_def metric_ss_conn = { "ss_conn", "Connection count", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_tx = { "ss_srv_tx", "Total TX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_rx = { "ss_srv_rx", "Total RX bytes", PROM_METRIC_TYPE_COUNTER };
+static prom_metric_def metric_ss_conn = { "ss_srv_conn", "Connection count", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer = { "ss_peer", "Peer", PROM_METRIC_TYPE_GAUGE };
 static prom_metric_def metric_peer_tx = { "ss_peer_tx", "Peer TX bytes", PROM_METRIC_TYPE_COUNTER };
 static prom_metric_def metric_peer_rx = { "ss_peer_rx", "Peer RX bytes", PROM_METRIC_TYPE_COUNTER };
