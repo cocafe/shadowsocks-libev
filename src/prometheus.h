@@ -65,7 +65,7 @@ typedef struct prom_metric_set {
         prom_metric_def_set *defs[PROM_MAX_METRICS];
 } prom_metric_set;
 
-int prom_init(prom_metric_set *s, uint32_t port)
+static inline int prom_init(prom_metric_set *s, uint32_t port)
 {
         static char fname[256] = { };
         snprintf(fname, sizeof(fname), "/tmp/prom_c_%u", port);
@@ -81,7 +81,7 @@ int prom_init(prom_metric_set *s, uint32_t port)
         return 0;
 }
 
-void prom_register(prom_metric_set *s, prom_metric_def *d)
+static inline void prom_register(prom_metric_set *s, prom_metric_def *d)
 {
         // Check if we already have this definition
         int existing = -1;
@@ -102,7 +102,7 @@ void prom_register(prom_metric_set *s, prom_metric_def *d)
 }
 
 // Initializes a prom_metric with a zero value and empty label set
-void prom_metric_init(prom_metric *m)
+static inline void prom_metric_init(prom_metric *m)
 {
         m->num_labels = 0;
         memset(&m->labels, 0, sizeof(prom_label) * PROM_MAX_LABELS);
@@ -112,14 +112,14 @@ void prom_metric_init(prom_metric *m)
 
 // Sets a label key and value on the given metric value.
 // The key and value strings are copied and owned by the metric.
-void prom_metric_set_label(prom_metric *m, char *key, char *value)
+static inline void prom_metric_set_label(prom_metric *m, char *key, char *value)
 {
         m->labels[m->num_labels].key = strdup(key);
         m->labels[m->num_labels].value = strdup(value);
         m->num_labels++;
 }
 
-prom_metric *prom_get(prom_metric_set *s, prom_metric_def *d, int n, ...)
+static inline prom_metric *prom_get(prom_metric_set *s, prom_metric_def *d, int n, ...)
 {
         va_list args;
         va_start(args, n);
@@ -185,7 +185,7 @@ prom_metric *prom_get(prom_metric_set *s, prom_metric_def *d, int n, ...)
         }
 }
 
-void prom_del(prom_metric *m)
+static inline void prom_del(prom_metric *m)
 {
         for (int i = 0; i < m->num_labels; i++) {
                 if (m->labels[i].key)
@@ -198,7 +198,7 @@ void prom_del(prom_metric *m)
         free(m);
 }
 
-void _prom_escape(char *buf, char *str)
+static inline void _prom_escape(char *buf, char *str)
 {
         int pos = 0;
         int len = strlen(str);
@@ -232,41 +232,44 @@ void _prom_escape(char *buf, char *str)
 }
 
 // Prints the metric value to the given IO
-void prom_metric_write(prom_metric_def_set *s, int f)
+static inline void prom_metric_write(prom_metric_def_set *s, int f)
 {
         prom_metric *m;
         char buf[PROM_BUF_SIZE];
+        ssize_t n = 0;
         // Write the header comments
         sprintf(buf, "# TYPE %s %s\n", s->def->name, s->def->type);
-        write(f, buf, strlen(buf));
+        n = write(f, buf, strlen(buf));
         sprintf(buf, "# HELP %s %s\n", s->def->name, s->def->help);
-        write(f, buf, strlen(buf));
+        n = write(f, buf, strlen(buf));
 
         // Write the metric values
         list_for_each_entry(m, &s->metrics, node) {
-                write(f, s->def->name, strlen(s->def->name));
+                n = write(f, s->def->name, strlen(s->def->name));
                 if (m->num_labels > 0) {
-                        write(f, "{", 1);
+                        n = write(f, "{", 1);
                         for (int i = 0; i < m->num_labels; i++) {
                                 _prom_escape(buf, m->labels[i].key);
-                                write(f, buf, strlen(buf));
-                                write(f, "=\"", 2);
+                                n = write(f, buf, strlen(buf));
+                                n = write(f, "=\"", 2);
                                 _prom_escape(buf, m->labels[i].value);
-                                write(f, buf, strlen(buf));
-                                write(f, "\"", 1);
+                                n = write(f, buf, strlen(buf));
+                                n = write(f, "\"", 1);
                                 if (i < (m->num_labels - 1)) {
-                                        write(f, ",", 1);
+                                        n = write(f, ",", 1);
                                 }
                         }
-                        write(f, "}", 1);
+                        n = write(f, "}", 1);
                 }
                 sprintf(buf, " %f\n", m->value);
-                write(f, buf, strlen(buf));
+                n = write(f, buf, strlen(buf));
         }
+
+        (void)n;
 }
 
 // Writes metrics out to the temp file
-void prom_flush(prom_metric_set *s)
+static inline void prom_flush(prom_metric_set *s)
 {
         FILE *f = fopen(s->fname, "w");
         for (int i = 0; i < s->n_defs; i++) {
@@ -275,7 +278,7 @@ void prom_flush(prom_metric_set *s)
         fclose(f);
 }
 
-void prom_cleanup(prom_metric_set *s)
+static inline void prom_cleanup(prom_metric_set *s)
 {
         for (int i = 0; i < s->n_defs; i++) {
                 prom_metric_def_set *ds = s->defs[i];
@@ -299,17 +302,18 @@ void prom_cleanup(prom_metric_set *s)
         // free(s);
 }
 
-void prom_http_write_header(int sock)
+static inline ssize_t prom_http_write_header(int sock)
 {
         char *resp = "HTTP/1.1 200 OK\n";
-        write(sock, resp, strlen(resp));
+        return write(sock, resp, strlen(resp));
 }
 
-int prom_start_server(prom_metric_set *s, int port, int *should_exit)
+static inline int prom_start_server(prom_metric_set *s, int port, int *should_exit)
 {
         int sockfd;
         int yes=1;
         int gai_ret;
+        ssize_t n = 0;
         struct addrinfo hints, *servinfo, *p;
 
         memset(&hints, 0, sizeof hints);
@@ -381,7 +385,7 @@ int prom_start_server(prom_metric_set *s, int port, int *should_exit)
 
                 prom_http_write_header(newfd);
                 // Separator for HTTP body
-                write(newfd, "\n", 1);
+                n = write(newfd, "\n", 1);
                 FILE *f = fopen(s->fname, "r");
                 if (f == NULL)
                         printf("Couldn't open file\n");
@@ -390,7 +394,7 @@ int prom_start_server(prom_metric_set *s, int port, int *should_exit)
                         size_t nread = fread(write_buf, sizeof(*write_buf), PROM_BUF_SIZE, f);
                         if (!nread)
                                 break;
-                        write(newfd, write_buf, nread);
+                        n = write(newfd, write_buf, nread);
                 }
                 fclose(f);
                 shutdown(newfd, 1);
@@ -400,6 +404,8 @@ check_exit:
                 if (should_exit && *should_exit)
                         break;
         }
+
+        (void)n;
 
         return 0;
 }

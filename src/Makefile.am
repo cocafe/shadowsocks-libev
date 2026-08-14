@@ -8,6 +8,7 @@ AM_CFLAGS += -I$(top_srcdir)/libipset/include
 AM_CFLAGS += -I$(top_srcdir)/libcork/include
 endif
 AM_CFLAGS += $(LIBPCRE_CFLAGS)
+# AM_LDFLAGS = -all-static
 
 SS_COMMON_LIBS = $(INET_NTOP_LIB) $(LIBPCRE_LIBS) $(NETFILTER_CONNTRACK_LIBS) $(NFTABLES_LIBS)
 if !USE_SYSTEM_SHARED_LIB
@@ -94,12 +95,16 @@ ss_redir_SOURCES = utils.c \
                    cache.c \
                    udprelay.c \
                    redir.c \
+                   prom_remote.c \
+                   prompb/types-v1.pb-c.c \
+                   prompb/remote-v1.pb-c.c \
                    $(crypto_src) \
                    $(plugin_src)
 
 ss_redir_CFLAGS = $(AM_CFLAGS) -DMODULE_REDIR
 ss_redir_LDADD = $(SS_COMMON_LIBS)
 ss_redir_LDADD += -lcares
+ss_redir_LDADD += -lprotobuf-c -lsnappy
 endif
 
 lib_LTLIBRARIES = libshadowsocks-libev.la
