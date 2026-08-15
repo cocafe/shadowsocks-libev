@@ -204,6 +204,10 @@ static char *remote_port  = NULL;
 static char *manager_addr = NULL;
 uint64_t tx               = 0;
 uint64_t rx               = 0;
+uint64_t tx_tcp           = 0;
+uint64_t rx_tcp           = 0;
+uint64_t tx_udp           = 0;
+uint64_t rx_udp           = 0;
 
 #ifndef __MINGW32__
 ev_timer stat_update_watcher;
@@ -1047,6 +1051,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
+    tx_tcp  += r;
     tx      += r;
     buf->len = r;
 
@@ -1525,7 +1530,8 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         }
     }
 
-    rx += r;
+    rx_tcp += r;
+    rx     += r;
 
     // Ignore any new packet if the server is stopped
     if (server->stage == STAGE_STOP) {
@@ -2144,26 +2150,48 @@ void metric_peer_conn_update(struct hash_tbl *tbl)
 
 void metric_ss_stat_update(void)
 {
-    {
-        prom_metric *m = prom_get(&metrics, &metric_ss_tx, 0);
-        m->value = tx;
+    if (mode != UDP_ONLY) {
+        {
+            prom_label label_tcp = { "proto", "tcp" };
+            prom_metric *m = prom_get(&metrics, &metric_ss_tx, 1, label_tcp);
+            m->value = tx_tcp;
+        }
     }
 
     {
-        prom_metric *m = prom_get(&metrics, &metric_ss_rx, 0);
-        m->value = rx;
+        prom_label label_udp = { "proto", "udp" };
+        prom_metric *m = prom_get(&metrics, &metric_ss_tx, 1, label_udp);
+        m->value = tx_udp;
+    }
+
+    if (mode != UDP_ONLY) {
+        {
+            prom_label label_tcp = { "proto", "tcp" };
+            prom_metric *m = prom_get(&metrics, &metric_ss_rx, 1, label_tcp);
+            m->value = rx_tcp;
+        }
     }
 
     {
-        prom_label label_type = { "type", "remote" };
-        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 1, label_type);
-        m->value = remote_conn;
+        prom_label label_udp = { "proto", "udp" };
+        prom_metric *m = prom_get(&metrics, &metric_ss_rx, 1, label_udp);
+        m->value = rx_udp;
     }
 
-    {
-        prom_label label_type = { "type", "client" };
-        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 1, label_type);
-        m->value = server_conn;
+    if (mode != UDP_ONLY) {
+        {
+            prom_label label_type = { "type", "remote" };
+            prom_label label_tcp  = { "proto", "tcp" };
+            prom_metric *m = prom_get(&metrics, &metric_ss_conn, 2, label_type, label_tcp);
+            m->value = remote_conn;
+        }
+
+        {
+            prom_label label_type = { "type", "client" };
+            prom_label label_tcp  = { "proto", "tcp" };
+            prom_metric *m = prom_get(&metrics, &metric_ss_conn, 2, label_type, label_tcp);
+            m->value = server_conn;
+        }
     }
 }
 

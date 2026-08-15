@@ -121,6 +121,8 @@ extern int reuse_port;
 #ifdef MODULE_REMOTE
 extern uint64_t tx;
 extern uint64_t rx;
+extern uint64_t tx_udp;
+extern uint64_t rx_udp;
 
 extern int is_bind_local_addr;
 extern struct sockaddr_storage local_addr_v4;
@@ -878,7 +880,8 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 
 #ifdef MODULE_REMOTE
 
-    rx += buf->len;
+    rx     += buf->len;
+    rx_udp += buf->len;
 
     // Reconstruct UDP response header
     char addr_header[MAX_ADDR_HEADER_SIZE];
@@ -1111,7 +1114,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
 #ifdef MODULE_REMOTE
-    tx += buf->len;
+    tx     += buf->len;
+    tx_udp += buf->len;
 
     int err = server_ctx->crypto->decrypt_all(buf, server_ctx->crypto->cipher, buf_size);
     if (err) {
