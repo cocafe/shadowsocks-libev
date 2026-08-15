@@ -379,6 +379,14 @@ read_jconf(const char *file)
                 conf.metric_conntrack = to_string(value);
             } else if (strcmp(name, "metric_conncount") == 0) {
                 conf.metric_conncount = to_string(value);
+            } else if (strcmp(name, "metric_update_interval") == 0) {
+                conf.metric_update_interval = to_string(value);
+            } else if (strcmp(name, "prom_remote_addr") == 0) {
+                conf.prom_remote_addr = to_string(value);
+            } else if (strcmp(name, "prom_remote_port") == 0) {
+                conf.prom_remote_port = to_string(value);
+            } else if (strcmp(name, "prom_label_instance") == 0) {
+                conf.prom_remote_instance = to_string(value);
             }
         }
     } else {

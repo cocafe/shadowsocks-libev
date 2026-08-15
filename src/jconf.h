@@ -75,6 +75,10 @@ typedef struct {
     char *metric_port;
     char *metric_conntrack;
     char *metric_conncount;
+    char *metric_update_interval;
+    char *prom_remote_addr;
+    char *prom_remote_port;
+    char *prom_remote_instance;
     int fast_open;
     int reuse_port;
     int tcp_incoming_sndbuf;

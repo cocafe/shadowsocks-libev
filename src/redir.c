@@ -1402,6 +1402,10 @@ main(int argc, char **argv)
     char *str_metric_port = NULL;
     char *str_metric_conntrack = NULL;
     char *str_metric_conncount = NULL;
+    char *str_metric_update_interval = NULL;
+    char *str_prom_remote_addr = NULL;
+    char *str_prom_remote_port = NULL;
+    char *str_prom_remote_instance = NULL;
 
     char *plugin      = NULL;
     char *plugin_opts = NULL;
@@ -1505,22 +1509,20 @@ main(int argc, char **argv)
             conn_clean_timeout = atoi(optarg);
             break;
         case 'R':
-            prom_remote_set_addr(optarg);
+            str_prom_remote_addr = optarg;
             break;
         case 'Q':
-            prom_remote_set_port((uint16_t)atoi(optarg));
+            str_prom_remote_port = optarg;
             break;
         case 'J':
-            prom_remote_set_instance(optarg);
+            str_prom_remote_instance = optarg;
             break;
         case 'I':
-            metric_update_interval = atoi(optarg);
-            if (metric_update_interval < 1)
-                metric_update_interval = 1;
+            str_metric_update_interval = optarg;
             break;
         case 'j':
-            metric_conncount = 1;
-            metric_conntrack = 1;
+            str_metric_conntrack = "1";
+            str_metric_conncount = "1";
             break;
         case GETOPT_VAL_PASSWORD:
         case 'k':
@@ -1612,6 +1614,18 @@ main(int argc, char **argv)
         }
         if (str_metric_conncount == NULL) {
             str_metric_conncount = conf->metric_conncount;
+        }
+        if (str_metric_update_interval == NULL) {
+            str_metric_update_interval = conf->metric_update_interval;
+        }
+        if (str_prom_remote_addr == NULL) {
+            str_prom_remote_addr = conf->prom_remote_addr;
+        }
+        if (str_prom_remote_port == NULL) {
+            str_prom_remote_port = conf->prom_remote_port;
+        }
+        if (str_prom_remote_instance == NULL) {
+            str_prom_remote_instance = conf->prom_remote_instance;
         }
         if (local_addr == NULL) {
             local_addr = conf->local_addr;
@@ -1932,6 +1946,21 @@ main(int argc, char **argv)
 
     if (str_metric_conncount)
         metric_conncount = atoi(str_metric_conncount);
+
+    if (str_metric_update_interval) {
+        metric_update_interval = atoi(str_metric_update_interval);
+        if (metric_update_interval < 1)
+            metric_update_interval = 1;
+    }
+
+    if (str_prom_remote_addr)
+        prom_remote_set_addr(str_prom_remote_addr);
+
+    if (str_prom_remote_port)
+        prom_remote_set_port((uint16_t)atoi(str_prom_remote_port));
+
+    if (str_prom_remote_instance)
+        prom_remote_set_instance(str_prom_remote_instance);
 
     metrics_enabled = metric_port != 0 || prom_remote_enabled();
 
