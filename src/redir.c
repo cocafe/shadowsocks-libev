@@ -128,6 +128,7 @@ static time_t conn_clean_timeout = PEER_CONN_IDLE_TIMEOUT;
 static uint32_t metric_port = 0;
 static uint32_t metric_conntrack = 0;
 static uint32_t metric_conncount = 0;
+static int metric_update_interval = 10;
 static int metrics_enabled = 0;
 
 static sem_t sem_prom_update;
@@ -1368,7 +1369,7 @@ prom_update_worker(void *arg)
         }
 
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 10;
+        ts.tv_sec += metric_update_interval;
 
         if (sem_timedwait(&sem_prom_update, &ts) != 0) {
             if (errno != ETIMEDOUT)
@@ -1431,6 +1432,7 @@ main(int argc, char **argv)
         { "prom-remote-addr", required_argument, NULL, 'R'               },
         { "prom-remote-port", required_argument, NULL, 'Q'               },
         { "prom-remote-instance", required_argument, NULL, 'J'           },
+        { "prom-interval",        required_argument, NULL, 'I'           },
         { "help",        no_argument,       NULL, GETOPT_VAL_HELP        },
         { "comment",     required_argument, NULL, GETOPT_VAL_DUMMY       },
         { NULL,          0,                 NULL, 0                      }
@@ -1440,7 +1442,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:M:C:R:Q:J:huUTv6Aj",
+    while ((c = getopt_long(argc, argv, "f:s:p:l:k:t:m:c:b:a:n:D:M:C:R:Q:J:I:huUTv6Aj",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -1510,6 +1512,11 @@ main(int argc, char **argv)
             break;
         case 'J':
             prom_remote_set_instance(optarg);
+            break;
+        case 'I':
+            metric_update_interval = atoi(optarg);
+            if (metric_update_interval < 1)
+                metric_update_interval = 1;
             break;
         case 'j':
             metric_conncount = 1;

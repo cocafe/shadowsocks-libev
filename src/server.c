@@ -82,6 +82,7 @@ enum datatypes {
 uint32_t metric_port = 0;
 uint32_t metric_conntrack = 0;
 static uint32_t metric_conncount = 0;
+static int metric_update_interval = 10;
 int metrics_enabled = 0;
 
 #ifndef PEER_CONN_IDLE_TIMEOUT
@@ -2323,7 +2324,7 @@ void *prom_update_worker(void *arg)
         }
 
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 10;
+        ts.tv_sec += metric_update_interval;
 
         if (sem_timedwait(&sem_prom_update, &ts) != 0) {
             if (errno != ETIMEDOUT)
@@ -2391,6 +2392,7 @@ main(int argc, char **argv)
         { "prom-remote-addr", required_argument, NULL, 'R'                   },
         { "prom-remote-port", required_argument, NULL, 'Q'                   },
         { "prom-remote-instance", required_argument, NULL, 'J'               },
+        { "prom-interval",        required_argument, NULL, 'I'               },
 #ifdef __linux__
         { "mptcp",           no_argument,       NULL, GETOPT_VAL_MPTCP       },
 #ifdef USE_NFTABLES
@@ -2404,7 +2406,7 @@ main(int argc, char **argv)
 
     USE_TTY();
 
-    while ((c = getopt_long(argc, argv, "f:s:p:P:l:k:t:m:b:c:i:d:a:n:M:C:R:Q:J:huUv6A",
+    while ((c = getopt_long(argc, argv, "f:s:p:P:l:k:t:m:b:c:i:d:a:n:M:C:R:Q:J:I:huUv6A",
                             long_options, NULL)) != -1) {
         switch (c) {
         case GETOPT_VAL_FAST_OPEN:
@@ -2487,6 +2489,11 @@ main(int argc, char **argv)
             break;
         case 'J':
             prom_remote_set_instance(optarg);
+            break;
+        case 'I':
+            metric_update_interval = atoi(optarg);
+            if (metric_update_interval < 1)
+                metric_update_interval = 1;
             break;
         case GETOPT_VAL_PASSWORD:
         case 'k':
