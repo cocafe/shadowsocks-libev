@@ -8,7 +8,8 @@ AM_CFLAGS += -I$(top_srcdir)/libipset/include
 AM_CFLAGS += -I$(top_srcdir)/libcork/include
 endif
 AM_CFLAGS += $(LIBPCRE_CFLAGS)
-# AM_LDFLAGS = -all-static
+AM_LDFLAGS = -all-static
+LIBS = @LIBS@ -lm
 
 SS_COMMON_LIBS = $(INET_NTOP_LIB) $(LIBPCRE_LIBS) $(NETFILTER_CONNTRACK_LIBS) $(NFTABLES_LIBS)
 if !USE_SYSTEM_SHARED_LIB
@@ -81,7 +82,7 @@ ss_manager_LDADD = $(SS_COMMON_LIBS)
 ss_local_LDADD += -lcares
 ss_tunnel_LDADD += -lcares
 ss_server_LDADD += -lcares
-ss_server_LDADD += -lprotobuf-c -lsnappy
+ss_server_LDADD += -lprotobuf-c -lsnappy -lstdc++
 ss_manager_LDADD += -lcares
 
 ss_local_CFLAGS = $(AM_CFLAGS) -DMODULE_LOCAL
@@ -108,7 +109,7 @@ ss_redir_SOURCES = utils.c \
 ss_redir_CFLAGS = $(AM_CFLAGS) -DMODULE_REDIR
 ss_redir_LDADD = $(SS_COMMON_LIBS)
 ss_redir_LDADD += -lcares
-ss_redir_LDADD += -lprotobuf-c -lsnappy
+ss_redir_LDADD += -lprotobuf-c -lsnappy -lstdc++
 endif
 
 lib_LTLIBRARIES = libshadowsocks-libev.la
