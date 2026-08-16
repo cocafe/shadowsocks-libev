@@ -129,6 +129,11 @@ extern struct sockaddr_storage local_addr_v4;
 extern struct sockaddr_storage local_addr_v6;
 #endif
 
+#ifdef MODULE_REDIR
+extern uint64_t tx_udp;
+extern uint64_t rx_udp;
+#endif
+
 static int packet_size                               = DEFAULT_PACKET_SIZE;
 static int buf_size                                  = DEFAULT_PACKET_SIZE * 2;
 static int server_num                                = 0;
@@ -832,6 +837,10 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 
     buf->len = r;
 
+#ifdef MODULE_REDIR
+    rx_udp += buf->len;
+#endif
+
 #ifdef MODULE_LOCAL
     int err = server_ctx->crypto->decrypt_all(buf, server_ctx->crypto->cipher, buf_size);
     if (err) {
@@ -1069,6 +1078,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     src_addr_len = msg.msg_namelen;
+
+    tx_udp += buf->len;
 #else
     ssize_t r;
     r = recvfrom(server_ctx->fd, buf->data, buf_size,

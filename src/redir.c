@@ -151,6 +151,8 @@ static int remote_conn = 0;
 static int local_conn = 0;
 static uint64_t tx_bytes = 0;
 static uint64_t rx_bytes = 0;
+uint64_t tx_udp = 0;
+uint64_t rx_udp = 0;
 
 static int
 getdestaddr(int fd, struct sockaddr_storage *destaddr)
@@ -1152,37 +1154,50 @@ prom_server_worker(void *arg)
 static void
 metric_ss_stat_update(void)
 {
-    if (mode == UDP_ONLY)
-        return;
-
     {
-        prom_label label_tcp  = { "proto", "tcp" };
+        prom_label label_udp  = { "proto", "udp" };
         prom_label label_port = { "redir_port", redir_port_str };
-        prom_metric *m = prom_get(&metrics, &metric_ss_tx, 2, label_tcp, label_port);
-        m->value = tx_bytes;
+        prom_metric *m = prom_get(&metrics, &metric_ss_tx, 2, label_udp, label_port);
+        m->value = tx_udp;
     }
 
     {
-        prom_label label_tcp  = { "proto", "tcp" };
+        prom_label label_udp  = { "proto", "udp" };
         prom_label label_port = { "redir_port", redir_port_str };
-        prom_metric *m = prom_get(&metrics, &metric_ss_rx, 2, label_tcp, label_port);
-        m->value = rx_bytes;
+        prom_metric *m = prom_get(&metrics, &metric_ss_rx, 2, label_udp, label_port);
+        m->value = rx_udp;
     }
 
-    {
-        prom_label label_type = { "type", "remote" };
-        prom_label label_tcp  = { "proto", "tcp" };
-        prom_label label_port = { "redir_port", redir_port_str };
-        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 3, label_type, label_tcp, label_port);
-        m->value = remote_conn;
-    }
+    if (mode != UDP_ONLY) {
+        {
+            prom_label label_tcp  = { "proto", "tcp" };
+            prom_label label_port = { "redir_port", redir_port_str };
+            prom_metric *m = prom_get(&metrics, &metric_ss_tx, 2, label_tcp, label_port);
+            m->value = tx_bytes;
+        }
 
-    {
-        prom_label label_type = { "type", "local" };
-        prom_label label_tcp  = { "proto", "tcp" };
-        prom_label label_port = { "redir_port", redir_port_str };
-        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 3, label_type, label_tcp, label_port);
-        m->value = local_conn;
+        {
+            prom_label label_tcp  = { "proto", "tcp" };
+            prom_label label_port = { "redir_port", redir_port_str };
+            prom_metric *m = prom_get(&metrics, &metric_ss_rx, 2, label_tcp, label_port);
+            m->value = rx_bytes;
+        }
+
+        {
+            prom_label label_type = { "type", "remote" };
+            prom_label label_tcp  = { "proto", "tcp" };
+            prom_label label_port = { "redir_port", redir_port_str };
+            prom_metric *m = prom_get(&metrics, &metric_ss_conn, 3, label_type, label_tcp, label_port);
+            m->value = remote_conn;
+        }
+
+        {
+            prom_label label_type = { "type", "local" };
+            prom_label label_tcp  = { "proto", "tcp" };
+            prom_label label_port = { "redir_port", redir_port_str };
+            prom_metric *m = prom_get(&metrics, &metric_ss_conn, 3, label_type, label_tcp, label_port);
+            m->value = local_conn;
+        }
     }
 }
 
