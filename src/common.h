@@ -43,6 +43,8 @@ int init_udprelay(const char *server_host, const char *server_port,
 
 void free_udprelay(void);
 int udp_conn_count(void);
+void udp_conn_tx_add(char *local, char *remote, size_t bytes);
+void udp_conn_rx_add(char *local, char *remote, size_t bytes);
 
 #ifdef __ANDROID__
 int protect_socket(int fd);

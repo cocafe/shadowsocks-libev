@@ -322,6 +322,46 @@ conn_count_add(server_t *server)
     pthread_spin_unlock(&conn_tbl.lck);
 }
 
+void
+udp_conn_tx_add(char *local, char *remote, size_t bytes)
+{
+    struct peer_conn *conn;
+
+    if (!metrics_enabled || metric_conntrack == 0)
+        return;
+
+    if (!local || !remote)
+        return;
+
+    pthread_spin_lock(&conn_tbl.lck);
+    conn = conn_get_or_create_locked(&conn_tbl, local, remote);
+    if (conn) {
+        conn->stats[PEER_CONN_STAT_UDP_TX] += bytes;
+        clock_gettime(CLOCK_REALTIME, &conn->ts);
+    }
+    pthread_spin_unlock(&conn_tbl.lck);
+}
+
+void
+udp_conn_rx_add(char *local, char *remote, size_t bytes)
+{
+    struct peer_conn *conn;
+
+    if (!metrics_enabled || metric_conntrack == 0)
+        return;
+
+    if (!local || !remote)
+        return;
+
+    pthread_spin_lock(&conn_tbl.lck);
+    conn = conn_get_or_create_locked(&conn_tbl, local, remote);
+    if (conn) {
+        conn->stats[PEER_CONN_STAT_UDP_RX] += bytes;
+        clock_gettime(CLOCK_REALTIME, &conn->ts);
+    }
+    pthread_spin_unlock(&conn_tbl.lck);
+}
+
 int
 setnonblocking(int fd)
 {
@@ -1219,7 +1259,9 @@ metric_conn_match(prom_metric *m, struct peer_conn *conn)
         return 0;
     if (strcmp(m->labels[1].key, "remote") || strcmp(m->labels[1].value, conn->remote))
         return 0;
-    if (strcmp(m->labels[2].key, "proto") || strcmp(m->labels[2].value, "tcp"))
+    if (strcmp(m->labels[2].key, "proto"))
+        return 0;
+    if (strcmp(m->labels[2].value, "tcp") && strcmp(m->labels[2].value, "udp"))
         return 0;
     if (strcmp(m->labels[3].key, "redir_port") || strcmp(m->labels[3].value, redir_port_str))
         return 0;
@@ -1262,6 +1304,7 @@ metric_conn_txrx_update(struct peer_conn *conn)
     prom_label label_local = { "local", conn->peer };
     prom_label label_remote = { "remote", conn->remote };
     prom_label label_tcp = { "proto", "tcp" };
+    prom_label label_udp = { "proto", "udp" };
     prom_label label_port = { "redir_port", redir_port_str };
 
     if (conn->stats[PEER_CONN_STAT_TCP_TX]) {
@@ -1274,6 +1317,18 @@ metric_conn_txrx_update(struct peer_conn *conn)
         prom_metric *m = prom_get(&metrics, &metric_conn_rx, 4,
                                   label_local, label_remote, label_tcp, label_port);
         m->value = conn->stats[PEER_CONN_STAT_TCP_RX];
+    }
+
+    if (conn->stats[PEER_CONN_STAT_UDP_TX]) {
+        prom_metric *m = prom_get(&metrics, &metric_conn_tx, 4,
+                                  label_local, label_remote, label_udp, label_port);
+        m->value = conn->stats[PEER_CONN_STAT_UDP_TX];
+    }
+
+    if (conn->stats[PEER_CONN_STAT_UDP_RX]) {
+        prom_metric *m = prom_get(&metrics, &metric_conn_rx, 4,
+                                  label_local, label_remote, label_udp, label_port);
+        m->value = conn->stats[PEER_CONN_STAT_UDP_RX];
     }
 }
 

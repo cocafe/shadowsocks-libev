@@ -976,6 +976,12 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
     }
     close(src_fd);
 
+    {
+        char local[INET6_ADDRSTRLEN + 2] = { };
+        get_peer_name_from_addr(local, &remote_ctx->src_addr);
+        udp_conn_rx_add(local, get_addr_str((struct sockaddr *)&dst_addr, true), r);
+    }
+
 #else
     size_t remote_src_addr_len = get_sockaddr_len((struct sockaddr *)&remote_ctx->src_addr);
 
@@ -1080,6 +1086,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     src_addr_len = msg.msg_namelen;
 
     tx_udp += buf->len;
+
+    {
+        char local[INET6_ADDRSTRLEN + 2] = { };
+        get_peer_name_from_addr(local, &src_addr);
+        udp_conn_tx_add(local, get_addr_str((struct sockaddr *)&dst_addr, true), buf->len);
+    }
 #else
     ssize_t r;
     r = recvfrom(server_ctx->fd, buf->data, buf_size,
