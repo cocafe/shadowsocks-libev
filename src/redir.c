@@ -1168,6 +1168,14 @@ metric_ss_stat_update(void)
         m->value = rx_udp;
     }
 
+    {
+        prom_label label_type = { "type", "udp" };
+        prom_label label_udp  = { "proto", "udp" };
+        prom_label label_port = { "redir_port", redir_port_str };
+        prom_metric *m = prom_get(&metrics, &metric_ss_conn, 3, label_type, label_udp, label_port);
+        m->value = udp_conn_count();
+    }
+
     if (mode != UDP_ONLY) {
         {
             prom_label label_tcp  = { "proto", "tcp" };

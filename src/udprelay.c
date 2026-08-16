@@ -1654,3 +1654,17 @@ free_udprelay()
         server_ctx_list[server_num] = NULL;
     }
 }
+
+int
+udp_conn_count(void)
+{
+    int count = 0;
+
+    for (int i = 0; i < server_num; i++) {
+        if (server_ctx_list[i] && server_ctx_list[i]->conn_cache) {
+            count += HASH_COUNT(server_ctx_list[i]->conn_cache->entries);
+        }
+    }
+
+    return count;
+}
